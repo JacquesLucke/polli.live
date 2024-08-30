@@ -1,0 +1,7 @@
+:5555 {
+	reverse_proxy {
+		to localhost:8001 localhost:8000
+
+		lb_policy query session
+	}
+}
