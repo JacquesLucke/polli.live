@@ -72,7 +72,7 @@ impl SessionID {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 struct UserID(String);
 
 impl UserID {
@@ -269,7 +269,7 @@ struct GetResponsesParams {
     start: Option<i64>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct RetrievedResponses {
     next_start: i64,
     responses_by_user: HashMap<UserID, String>,
@@ -421,6 +421,53 @@ mod tests {
             builder.send().await.unwrap()
         }
 
+        async fn set_page_and_check(&self, session_id: &str, token: &str, page: &str) {
+            let res = self
+                .request_page_update(Some(session_id), Some(token), page)
+                .await;
+            assert_eq!(res.status(), reqwest::StatusCode::OK);
+            assert_eq!(self.request_session_page_text(session_id).await, page);
+        }
+
+        async fn send_reponse(
+            &self,
+            session_id: Option<&str>,
+            user_id: Option<&str>,
+            response_data: &str,
+        ) -> reqwest::Response {
+            let mut url = self.url.clone();
+            url.push_str("/respond?");
+            if session_id.is_some() {
+                url.push_str(&format!("session={}&", session_id.unwrap()));
+            }
+            if user_id.is_some() {
+                url.push_str(&format!("user={}", user_id.unwrap()));
+            }
+            self.client
+                .post(url)
+                .body(response_data.to_string())
+                .send()
+                .await
+                .unwrap()
+        }
+
+        async fn request_responses(
+            &self,
+            session_id: Option<&str>,
+            token: Option<&str>,
+        ) -> reqwest::Response {
+            let url = match session_id {
+                None => format!("{}/responses", &self.url),
+                Some(session_id) => format!("{}/responses?session={}", &self.url, session_id),
+            };
+            println!("{}", url);
+            let mut builder = self.client.get(&url);
+            if token.is_some() {
+                builder = builder.bearer_auth(token.unwrap());
+            }
+            builder.send().await.unwrap()
+        }
+
         async fn request_static_page(&self, path: &str) -> reqwest::Response {
             self.client
                 .get(format!("{}{}", self.url, path))
@@ -530,5 +577,36 @@ mod tests {
             .await;
         assert_eq!(res.status(), reqwest::StatusCode::UNAUTHORIZED);
         assert_eq!(ctx.request_session_page_text(session).await, page_1);
+    }
+
+    #[tokio::test]
+    async fn single_response() {
+        let ctx = setup().await;
+
+        let session = "c";
+        let token = "my-test-token";
+        let page = "test page";
+        let user = "me";
+        let response_data = "42";
+
+        ctx.set_page_and_check(session, token, page).await;
+
+        let res = ctx
+            .send_reponse(Some(session), Some(user), response_data)
+            .await;
+        assert_eq!(res.status(), reqwest::StatusCode::OK);
+
+        let res = ctx.request_responses(Some(&session), Some(token)).await;
+        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        let result: RetrievedResponses = res.json().await.unwrap();
+        assert_eq!(result.next_start, 1);
+        assert_eq!(result.responses_by_user.len(), 1);
+        assert_eq!(
+            result
+                .responses_by_user
+                .get(&UserID::from_string(user).unwrap())
+                .unwrap(),
+            response_data
+        );
     }
 }

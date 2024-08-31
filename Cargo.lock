@@ -1373,6 +1373,7 @@ dependencies = [
  "include_dir",
  "reqwest",
  "serde",
+ "serde_json",
  "tokio",
 ]
 
