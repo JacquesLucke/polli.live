@@ -129,11 +129,19 @@ impl Default for Settings {
 
 struct SharedState {
     settings: Settings,
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
 }
 
 struct State {
     sessions: HashMap<SessionID, SessionState>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        State {
+            sessions: HashMap::new(),
+        }
+    }
 }
 
 struct SessionState {
@@ -337,14 +345,16 @@ async fn get_responses(
     }
 }
 
-async fn start_server(listener: TcpListener, settings: Settings) -> std::io::Result<()> {
+async fn start_server(
+    listener: TcpListener,
+    settings: Settings,
+    state: Arc<Mutex<State>>,
+) -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(SharedState {
                 settings: settings,
-                state: Mutex::new(State {
-                    sessions: HashMap::new(),
-                }),
+                state: state.clone(),
             }))
             .wrap(DefaultHeaders::new().add(CacheControl(vec![CacheDirective::NoCache])))
             .wrap(Cors::permissive())
@@ -375,6 +385,9 @@ async fn main() -> std::io::Result<()> {
         Settings {
             ..Default::default()
         },
+        Arc::new(Mutex::new(State {
+            ..Default::default()
+        })),
     )
     .await
 }
@@ -487,6 +500,9 @@ mod tests {
                 Settings {
                     ..Default::default()
                 },
+                Arc::new(Mutex::new(State {
+                    ..Default::default()
+                })),
             )
             .await
             .expect("failed to start server");
