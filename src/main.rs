@@ -145,7 +145,7 @@ struct SessionState {
     responses: HashMap<UserID, UserResponse>,
     access_token: AccessToken,
     next_response_id: usize,
-    last_access_token_use: DateTime<Utc>,
+    last_request: DateTime<Utc>,
 }
 
 impl SessionState {
@@ -156,7 +156,7 @@ impl SessionState {
             responses: HashMap::new(),
             access_token: access_token,
             next_response_id: 0,
-            last_access_token_use: Utc::now(),
+            last_request: Utc::now(),
         }
     }
 
@@ -167,7 +167,7 @@ impl SessionState {
     }
 
     fn session_used(&mut self) {
-        self.last_access_token_use = Utc::now();
+        self.last_request = Utc::now();
     }
 }
 
@@ -271,8 +271,7 @@ async fn set_page(
         }
         Some(session) => {
             if session.access_token != access_token {
-                if session.last_access_token_use + shared_state.settings.token_timeout > Utc::now()
-                {
+                if session.last_request + shared_state.settings.token_timeout > Utc::now() {
                     return Err(AppError::BadAccessToken);
                 }
                 *session = SessionState::new(access_token, page);
