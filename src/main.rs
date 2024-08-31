@@ -143,10 +143,10 @@ impl SessionState {
     fn update(&mut self, page: String) {
         self.page = page;
         self.responses.clear();
-        self.access_token_used();
+        self.session_used();
     }
 
-    fn access_token_used(&mut self) {
+    fn session_used(&mut self) {
         self.last_access_token_use = Utc::now();
     }
 }
@@ -279,21 +279,14 @@ struct RetrievedResponses {
 async fn get_responses(
     query: web::Query<GetResponsesParams>,
     shared_state: web::Data<SharedState>,
-    auth: BearerAuth,
 ) -> Result<impl Responder, AppError> {
-    let access_token = AccessToken::from_string(auth.token())?;
     let session_id = SessionID::from_string(&query.session)?;
 
     let notifier = {
         let mut state = shared_state.state.lock().unwrap();
         match state.sessions.get_mut(&session_id) {
             None => return Err(AppError::SessionIDDoesNotExist),
-            Some(session) => {
-                if access_token != session.access_token {
-                    return Err(AppError::BadAccessToken);
-                }
-                session.response_notifier.clone()
-            }
+            Some(session) => session.response_notifier.clone(),
         }
     };
     if !shared_state.long_poll_duration.is_zero() {
@@ -307,11 +300,7 @@ async fn get_responses(
     match state.sessions.get_mut(&session_id) {
         None => Err(AppError::SessionIDDoesNotExist),
         Some(session) => {
-            if access_token != session.access_token {
-                return Err(AppError::BadAccessToken);
-            }
-
-            session.access_token_used();
+            session.session_used();
             let start = query.start.unwrap_or(0);
             let mut response = RetrievedResponses {
                 next_start: session.next_response_id,
@@ -451,21 +440,12 @@ mod tests {
                 .unwrap()
         }
 
-        async fn request_responses(
-            &self,
-            session_id: Option<&str>,
-            token: Option<&str>,
-        ) -> reqwest::Response {
+        async fn request_responses(&self, session_id: Option<&str>) -> reqwest::Response {
             let url = match session_id {
                 None => format!("{}/responses", &self.url),
                 Some(session_id) => format!("{}/responses?session={}", &self.url, session_id),
             };
-            println!("{}", url);
-            let mut builder = self.client.get(&url);
-            if token.is_some() {
-                builder = builder.bearer_auth(token.unwrap());
-            }
-            builder.send().await.unwrap()
+            self.client.get(&url).send().await.unwrap()
         }
 
         async fn request_static_page(&self, path: &str) -> reqwest::Response {
@@ -596,7 +576,7 @@ mod tests {
             .await;
         assert_eq!(res.status(), reqwest::StatusCode::OK);
 
-        let res = ctx.request_responses(Some(&session), Some(token)).await;
+        let res = ctx.request_responses(Some(&session)).await;
         assert_eq!(res.status(), reqwest::StatusCode::OK);
         let result: RetrievedResponses = res.json().await.unwrap();
         assert_eq!(result.next_start, 1);
