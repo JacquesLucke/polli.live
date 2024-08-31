@@ -1,0 +1,33 @@
+<script>
+  const polli_live = (function () {
+    function get_user() {
+      let user_id = localStorage.getItem("user_id");
+      if (!user_id) {
+        user_id = Math.random().toString(36).substr(2, 9);
+      }
+      localStorage.setItem("user_id", user_id);
+      return user_id;
+    }
+
+    function get_session() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("session");
+    }
+
+    function respond(data) {
+      const session = get_session();
+      const user = get_user();
+      fetch(
+        `${window.location.protocol}//${window.location.host}/respond?user=${user}&session=${session}`,
+        {
+          method: "POST",
+          body: data,
+        }
+      );
+    }
+
+    return {
+      respond,
+    };
+  })();
+</script>

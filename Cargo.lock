@@ -1479,6 +1479,7 @@ dependencies = [
  "clap",
  "derive_more 1.0.0",
  "include_dir",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",

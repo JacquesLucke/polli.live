@@ -9,6 +9,8 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use derive_more::derive::{Display, Error};
 use include_dir::include_dir;
+use rand::rngs::OsRng;
+use rand::Rng;
 use std::net::TcpListener;
 use std::time::Duration;
 use std::{
@@ -27,6 +29,9 @@ struct Args {
 
     #[arg(long, default_value = "8000")]
     port: u16,
+
+    #[arg(long)]
+    root_url: Option<String>,
 }
 
 #[derive(Debug, Display, Error)]
@@ -37,6 +42,7 @@ enum AppError {
     SessionIDDoesNotExist,
     PageTooLarge,
     ResponseTooLarge,
+    ServerError,
 }
 
 impl error::ResponseError for AppError {
@@ -54,6 +60,7 @@ impl error::ResponseError for AppError {
             AppError::BadAccessToken => StatusCode::UNAUTHORIZED,
             AppError::PageTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::ResponseTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            AppError::ServerError => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
@@ -108,7 +115,7 @@ struct SessionQueryParam {
     session: Option<String>,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 struct Settings {
     token_timeout: Duration,
     long_poll_duration: Duration,
@@ -117,10 +124,11 @@ struct Settings {
     cleanup_interval: Duration,
     session_keep_alive_duration: Duration,
     max_memory_usage: Byte,
+    root_url: String,
 }
 
-impl Default for Settings {
-    fn default() -> Self {
+impl Settings {
+    fn default(root_url: String) -> Self {
         Settings {
             token_timeout: Duration::from_secs(60 * 60 * 24),
             long_poll_duration: Duration::from_secs(1),
@@ -129,6 +137,7 @@ impl Default for Settings {
             cleanup_interval: Duration::from_secs(3),
             session_keep_alive_duration: Duration::from_secs(24 * 60 * 60),
             max_memory_usage: Byte::from_u64_with_unit(500, Unit::MB).unwrap(),
+            root_url: root_url,
         }
     }
 }
@@ -263,7 +272,7 @@ async fn respond(
 
 #[post("/set_page")]
 async fn set_page(
-    page: String,
+    mut page: String,
     query: web::Query<SessionQueryParam>,
     shared_state: web::Data<SharedState>,
     auth: BearerAuth,
@@ -274,6 +283,13 @@ async fn set_page(
 
     if Byte::from_u64(page.len() as u64) > shared_state.settings.max_page_size {
         return Err(AppError::PageTooLarge);
+    }
+
+    match page.find("</body>") {
+        None => {}
+        Some(idx) => {
+            page.insert_str(idx, &get_static_file("polli_live_injection.html"));
+        }
     }
 
     let mut state = shared_state.state.lock().unwrap();
@@ -354,6 +370,86 @@ async fn get_responses(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct DesiredSession {
+    session: String,
+    token: String,
+}
+
+#[derive(serde::Serialize)]
+struct InitSessionResponse {
+    session: String,
+    token: String,
+}
+
+#[post("/init_session")]
+async fn init_session(
+    req_body: String,
+    shared_state: web::Data<SharedState>,
+) -> Result<impl Responder, AppError> {
+    let mut session_id_length = 6;
+    let mut next: DesiredSession =
+        serde_json::from_str(&req_body).unwrap_or_else(|_| DesiredSession {
+            session: make_random_session_id(session_id_length),
+            token: make_random_access_token(),
+        });
+    let retries = 5;
+    let initial_page = get_static_file("initial_session_page.html");
+
+    for retry_i in 0..retries {
+        // Todo, safely handle root url.
+        let url = format!(
+            "{}/set_page?session={}",
+            shared_state.settings.root_url, next.session
+        );
+        let client = reqwest::Client::new();
+        match client
+            .post(url)
+            .bearer_auth(&next.token)
+            .body(initial_page)
+            .send()
+            .await
+        {
+            Err(_) => {
+                return Err(AppError::ServerError);
+            }
+            Ok(res) => {
+                if res.status() == reqwest::StatusCode::OK {
+                    return Ok(HttpResponse::Ok().json(InitSessionResponse {
+                        session: next.session,
+                        token: next.token,
+                    }));
+                }
+            }
+        }
+
+        if retry_i > 2 {
+            // Increase session id length to increase likelyness to find one that is free.
+            session_id_length += 1;
+        }
+
+        next.session = make_random_session_id(session_id_length);
+        next.token = make_random_access_token();
+    }
+
+    Err(AppError::ServerError)
+}
+
+fn make_random_session_id(length: usize) -> String {
+    let mut rng = rand::thread_rng();
+    (0..length)
+        .map(|_| rng.gen_range(0..10).to_string())
+        .collect()
+}
+
+fn make_random_access_token() -> String {
+    let token_length = 32;
+    let mut rng = OsRng;
+    (0..token_length)
+        .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+        .collect()
+}
+
 fn count_user_memory_usage(state: &State) -> Byte {
     let mut used_bytes: usize = 0;
     for (session_id, session) in &state.sessions {
@@ -428,7 +524,7 @@ async fn start_server(
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(SharedState {
-                settings: settings,
+                settings: settings.clone(),
                 state: state.clone(),
             }))
             .wrap(DefaultHeaders::new().add(CacheControl(vec![CacheDirective::NoCache])))
@@ -437,6 +533,7 @@ async fn start_server(
             .service(set_page)
             .service(get_responses)
             .service(respond)
+            .service(init_session)
     })
     .workers(1)
     .listen(listener)
@@ -447,17 +544,18 @@ async fn start_server(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let mut args = Args::parse();
+    let args = Args::parse();
 
     let listener = TcpListener::bind((args.host.clone(), args.port)).expect("Cannot bind to port");
     let actual_port = listener.local_addr().unwrap().port();
-    args.port = actual_port;
 
     println!("Start server on http://{}:{}", args.host, actual_port);
 
-    let settings = Settings {
-        ..Default::default()
-    };
+    let root_url = args
+        .root_url
+        .unwrap_or_else(|| format!("http://127.0.0.1:{}", actual_port));
+
+    let settings = Settings::default(root_url);
 
     let state = Arc::new(Mutex::new(State {
         ..Default::default()
@@ -573,13 +671,13 @@ mod tests {
     async fn setup() -> TestContext {
         let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to random port");
         let port = listener.local_addr().unwrap().port();
+        let url = format!("http://127.0.0.1:{}", port);
 
+        let url_clone = url.clone();
         let server = tokio::spawn(async move {
             start_server(
                 listener,
-                Settings {
-                    ..Default::default()
-                },
+                Settings::default(url_clone),
                 Arc::new(Mutex::new(State {
                     ..Default::default()
                 })),
@@ -593,7 +691,7 @@ mod tests {
 
         TestContext {
             handle: server,
-            url: format!("http://127.0.0.1:{}", port),
+            url: url,
             client: reqwest::Client::new(),
         }
     }
