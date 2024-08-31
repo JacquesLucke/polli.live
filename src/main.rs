@@ -124,7 +124,7 @@ struct SessionState {
     page: String,
     responses: HashMap<UserID, UserResponse>,
     access_token: AccessToken,
-    next_response_id: i64,
+    next_response_id: usize,
     last_access_token_use: DateTime<Utc>,
 }
 
@@ -153,7 +153,7 @@ impl SessionState {
 
 struct UserResponse {
     data: String,
-    id: i64,
+    id: usize,
     was_received: bool,
 }
 
@@ -266,12 +266,12 @@ async fn set_page(
 #[derive(serde::Deserialize)]
 struct GetResponsesParams {
     session: String,
-    start: Option<i64>,
+    start: Option<usize>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct RetrievedResponses {
-    next_start: i64,
+    next_start: usize,
     responses_by_user: HashMap<UserID, String>,
 }
 
