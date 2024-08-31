@@ -4,6 +4,7 @@ use actix_web::http::StatusCode;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::{error, get, post, web, App, HttpResponse, HttpServer, Responder};
 use actix_web_httpauth::extractors::bearer::BearerAuth;
+use byte_unit::{Byte, Unit};
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use derive_more::derive::{Display, Error};
@@ -26,6 +27,9 @@ struct Args {
 
     #[arg(long, default_value = "8000")]
     port: u16,
+
+    #[arg(long, default_value = "100")]
+    memory_usage_mb: usize,
 }
 
 #[derive(Debug, Display, Error)]
@@ -107,11 +111,27 @@ struct SessionQueryParam {
     session: Option<String>,
 }
 
-struct SharedState {
+#[derive(Copy, Clone)]
+struct Settings {
     token_timeout: Duration,
     long_poll_duration: Duration,
-    max_response_size: usize,
-    max_page_size: usize,
+    max_response_size: Byte,
+    max_page_size: Byte,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            token_timeout: Duration::from_secs(60 * 60 * 24),
+            long_poll_duration: Duration::from_secs(1),
+            max_page_size: Byte::from_u64_with_unit(1, Unit::MB).unwrap(),
+            max_response_size: Byte::from_u64_with_unit(4, Unit::KB).unwrap(),
+        }
+    }
+}
+
+struct SharedState {
+    settings: Settings,
     state: Mutex<State>,
 }
 
@@ -201,7 +221,7 @@ async fn respond(
     let session_id = SessionID::from_string(&query.session)?;
     let user_id = UserID::from_string(&query.user)?;
 
-    if response_data.len() > shared_state.max_response_size {
+    if Byte::from_u64(response_data.len() as u64) > shared_state.settings.max_response_size {
         return Err(AppError::ResponseTooLarge);
     }
 
@@ -238,7 +258,7 @@ async fn set_page(
     let session_id = query.session.as_ref().ok_or(AppError::BadSessionID)?;
     let session_id = SessionID::from_string(session_id)?;
 
-    if page.len() > shared_state.max_page_size {
+    if Byte::from_u64(page.len() as u64) > shared_state.settings.max_page_size {
         return Err(AppError::PageTooLarge);
     }
 
@@ -251,7 +271,8 @@ async fn set_page(
         }
         Some(session) => {
             if session.access_token != access_token {
-                if session.last_access_token_use + shared_state.token_timeout > Utc::now() {
+                if session.last_access_token_use + shared_state.settings.token_timeout > Utc::now()
+                {
                     return Err(AppError::BadAccessToken);
                 }
                 *session = SessionState::new(access_token, page);
@@ -289,11 +310,11 @@ async fn get_responses(
             Some(session) => session.response_notifier.clone(),
         }
     };
-    if !shared_state.long_poll_duration.is_zero() {
+    if !shared_state.settings.long_poll_duration.is_zero() {
         // Don't wait for notifier while the mutex is locked!
         tokio::select! {
             _ = notifier.notified() => {},
-            _ = tokio::time::sleep(shared_state.long_poll_duration) => {},
+            _ = tokio::time::sleep(shared_state.settings.long_poll_duration) => {},
         }
     }
     let mut state = shared_state.state.lock().unwrap();
@@ -320,14 +341,11 @@ async fn get_responses(
     }
 }
 
-async fn start_server(listener: TcpListener) -> std::io::Result<()> {
+async fn start_server(listener: TcpListener, settings: Settings) -> std::io::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(SharedState {
-                token_timeout: Duration::from_secs(60 * 60 * 24),
-                long_poll_duration: Duration::from_secs(1),
-                max_page_size: 1024 * 1024,
-                max_response_size: 8 * 1024,
+                settings: settings,
                 state: Mutex::new(State {
                     sessions: HashMap::new(),
                 }),
@@ -356,7 +374,13 @@ async fn main() -> std::io::Result<()> {
 
     println!("Start server on http://{}:{}", args.host, actual_port);
 
-    start_server(listener).await
+    start_server(
+        listener,
+        Settings {
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -462,9 +486,14 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
 
         let server = tokio::spawn(async move {
-            start_server(listener)
-                .await
-                .expect("failed to start server");
+            start_server(
+                listener,
+                Settings {
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("failed to start server");
         });
 
         // Wait for server to start.
