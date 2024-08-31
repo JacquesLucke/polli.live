@@ -27,9 +27,6 @@ struct Args {
 
     #[arg(long, default_value = "8000")]
     port: u16,
-
-    #[arg(long, default_value = "100")]
-    memory_usage_mb: usize,
 }
 
 #[derive(Debug, Display, Error)]
