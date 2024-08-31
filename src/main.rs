@@ -114,6 +114,9 @@ struct Settings {
     long_poll_duration: Duration,
     max_response_size: Byte,
     max_page_size: Byte,
+    cleanup_interval: Duration,
+    session_keep_alive_duration: Duration,
+    max_memory_usage: Byte,
 }
 
 impl Default for Settings {
@@ -123,6 +126,9 @@ impl Default for Settings {
             long_poll_duration: Duration::from_secs(1),
             max_page_size: Byte::from_u64_with_unit(1, Unit::MB).unwrap(),
             max_response_size: Byte::from_u64_with_unit(4, Unit::KB).unwrap(),
+            cleanup_interval: Duration::from_secs(3),
+            session_keep_alive_duration: Duration::from_secs(24 * 60 * 60),
+            max_memory_usage: Byte::from_u64_with_unit(500, Unit::MB).unwrap(),
         }
     }
 }
@@ -180,6 +186,7 @@ struct UserResponse {
     data: String,
     id: usize,
     was_received: bool,
+    time: DateTime<Utc>,
 }
 
 #[get("/")]
@@ -243,8 +250,10 @@ async fn respond(
                     data: response_data,
                     id: response_id,
                     was_received: false,
+                    time: Utc::now(),
                 },
             );
+            session.session_used();
             session.response_notifier.notify_waiters();
 
             Ok(HttpResponse::Ok().body("Response updated."))
@@ -345,6 +354,72 @@ async fn get_responses(
     }
 }
 
+fn count_user_memory_usage(state: &State) -> Byte {
+    let mut used_bytes: usize = 0;
+    for (session_id, session) in &state.sessions {
+        used_bytes += session_id.0.len() + session.page.len() + session.access_token.0.len();
+        for (user_id, user_response) in &session.responses {
+            used_bytes += user_id.0.len() + user_response.data.len();
+        }
+        used_bytes += size_of::<UserResponse>() * session.responses.capacity();
+    }
+    used_bytes += size_of::<SessionState>() * state.sessions.capacity();
+    Byte::from_u64(used_bytes as u64)
+}
+
+fn get_memory_usage_with_safety_buffer(state: &State) -> Byte {
+    count_user_memory_usage(state).multiply(2).unwrap()
+}
+
+async fn periodic_cleanup(settings: Settings, state: Arc<Mutex<State>>) {
+    let mut interval = tokio::time::interval(settings.cleanup_interval);
+    loop {
+        interval.tick().await;
+        let mut state = state.lock().unwrap();
+        let now = Utc::now();
+
+        // Delete old sessions.
+        state.sessions.retain(|_, session| {
+            return session.last_request + settings.session_keep_alive_duration > now;
+        });
+
+        // Count used memory with a safety buffer in case more drastic measures to free
+        // memory have to be taken.
+        let used_bytes = get_memory_usage_with_safety_buffer(&state);
+        if used_bytes < settings.max_memory_usage {
+            // Enough memory is available. No need to do anything else.
+            continue;
+        }
+
+        // Free responses that should have been received by all interested parties already.
+        for (_, session) in &mut state.sessions {
+            session.responses.retain(|_, user_response| {
+                return user_response.was_received
+                    && user_response.time + Duration::from_secs(30) > now;
+            });
+        }
+
+        let used_bytes = get_memory_usage_with_safety_buffer(&state);
+        if used_bytes < settings.max_memory_usage {
+            // Looks like nothing else has to be freed.
+            continue;
+        }
+
+        // If all above did not help, it's likely that there is some kind of attack.
+        // It's not really something we can protect against at this level. Best we
+        // can do is to just free everything that wasn't used a few seconds ago.
+        // Valid users should use this system in real-time and should have received
+        // responses in less than a few seconds already.
+        state.sessions.retain(|_, session| {
+            return session.last_request + Duration::from_secs(5) > now;
+        });
+        state.sessions.shrink_to_fit();
+        for (_, session) in &mut state.sessions {
+            session.responses.shrink_to_fit();
+        }
+    }
+}
+
 async fn start_server(
     listener: TcpListener,
     settings: Settings,
@@ -380,16 +455,21 @@ async fn main() -> std::io::Result<()> {
 
     println!("Start server on http://{}:{}", args.host, actual_port);
 
-    start_server(
-        listener,
-        Settings {
-            ..Default::default()
-        },
-        Arc::new(Mutex::new(State {
-            ..Default::default()
-        })),
-    )
-    .await
+    let settings = Settings {
+        ..Default::default()
+    };
+
+    let state = Arc::new(Mutex::new(State {
+        ..Default::default()
+    }));
+
+    let settings_clone = settings.clone();
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        periodic_cleanup(settings_clone, state_clone).await;
+    });
+
+    start_server(listener, settings, state).await
 }
 
 #[cfg(test)]
