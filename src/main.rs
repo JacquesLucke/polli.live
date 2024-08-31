@@ -34,8 +34,8 @@ enum AppError {
     BadSessionID,
     BadAccessToken,
     SessionIDDoesNotExist,
-    ServerError,
     PageTooLarge,
+    ResponseTooLarge,
 }
 
 impl error::ResponseError for AppError {
@@ -50,9 +50,9 @@ impl error::ResponseError for AppError {
             AppError::BadUserID => StatusCode::BAD_REQUEST,
             AppError::BadSessionID => StatusCode::BAD_REQUEST,
             AppError::SessionIDDoesNotExist => StatusCode::NOT_FOUND,
-            AppError::ServerError => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::BadAccessToken => StatusCode::UNAUTHORIZED,
             AppError::PageTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            AppError::ResponseTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         }
     }
 }
@@ -103,13 +103,15 @@ impl AccessToken {
 }
 
 #[derive(serde::Deserialize)]
-struct SessionQueryParams {
+struct SessionQueryParam {
     session: Option<String>,
 }
 
 struct SharedState {
     token_timeout: Duration,
     long_poll_duration: Duration,
+    max_response_size: usize,
+    max_page_size: usize,
     state: Mutex<State>,
 }
 
@@ -157,8 +159,8 @@ struct UserResponse {
 
 #[get("/")]
 async fn index(
-    query: web::Query<SessionQueryParams>,
-    state: web::Data<SharedState>,
+    query: web::Query<SessionQueryParam>,
+    shared_state: web::Data<SharedState>,
 ) -> Result<impl Responder, AppError> {
     match &query.session {
         None => Ok(HttpResponse::Ok()
@@ -166,13 +168,13 @@ async fn index(
             .body(get_static_file("index.html"))),
         Some(session_id) => {
             let session_id = SessionID::from_string(&session_id)?;
-            Ok(get_poll_page(session_id, state))
+            Ok(get_poll_page(session_id, shared_state))
         }
     }
 }
 
-fn get_poll_page(session_id: SessionID, state: web::Data<SharedState>) -> HttpResponse {
-    let state = state.state.lock().unwrap();
+fn get_poll_page(session_id: SessionID, shared_state: web::Data<SharedState>) -> HttpResponse {
+    let state = shared_state.state.lock().unwrap();
     match state.sessions.get(&session_id) {
         None => HttpResponse::NotFound().body(get_static_file("empty_session_page.html")),
         Some(session) => HttpResponse::Ok().body(session.page.clone()),
@@ -184,16 +186,61 @@ fn get_static_file(filename: &str) -> &'static str {
     index_html.contents_utf8().unwrap()
 }
 
+#[derive(serde::Deserialize)]
+struct RespondQueryParams {
+    session: String,
+    user: String,
+}
+
+#[post("/respond")]
+async fn respond(
+    response_data: String,
+    query: web::Query<RespondQueryParams>,
+    shared_state: web::Data<SharedState>,
+) -> Result<impl Responder, AppError> {
+    let session_id = SessionID::from_string(&query.session)?;
+    let user_id = UserID::from_string(&query.user)?;
+
+    if response_data.len() > shared_state.max_response_size {
+        return Err(AppError::ResponseTooLarge);
+    }
+
+    let mut state = shared_state.state.lock().unwrap();
+    match state.sessions.get_mut(&session_id) {
+        None => Err(AppError::SessionIDDoesNotExist),
+        Some(session) => {
+            let response_id = session.next_response_id;
+            session.next_response_id += 1;
+
+            session.responses.insert(
+                user_id,
+                UserResponse {
+                    data: response_data,
+                    id: response_id,
+                    was_received: false,
+                },
+            );
+            session.response_notifier.notify_waiters();
+
+            Ok(HttpResponse::Ok().body("Response updated."))
+        }
+    }
+}
+
 #[post("/set_page")]
 async fn set_page(
     page: String,
-    query: web::Query<SessionQueryParams>,
+    query: web::Query<SessionQueryParam>,
     shared_state: web::Data<SharedState>,
     auth: BearerAuth,
 ) -> Result<impl Responder, AppError> {
     let access_token = AccessToken::from_string(auth.token())?;
     let session_id = query.session.as_ref().ok_or(AppError::BadSessionID)?;
     let session_id = SessionID::from_string(session_id)?;
+
+    if page.len() > shared_state.max_page_size {
+        return Err(AppError::PageTooLarge);
+    }
 
     let mut state = shared_state.state.lock().unwrap();
     match state.sessions.get_mut(&session_id) {
@@ -237,17 +284,31 @@ async fn get_responses(
     let access_token = AccessToken::from_string(auth.token())?;
     let session_id = SessionID::from_string(&query.session)?;
 
+    let notifier = {
+        let mut state = shared_state.state.lock().unwrap();
+        match state.sessions.get_mut(&session_id) {
+            None => return Err(AppError::SessionIDDoesNotExist),
+            Some(session) => {
+                if access_token != session.access_token {
+                    return Err(AppError::BadAccessToken);
+                }
+                session.response_notifier.clone()
+            }
+        }
+    };
+    if !shared_state.long_poll_duration.is_zero() {
+        // Don't wait for notifier while the mutex is locked!
+        tokio::select! {
+            _ = notifier.notified() => {},
+            _ = tokio::time::sleep(shared_state.long_poll_duration) => {},
+        }
+    }
     let mut state = shared_state.state.lock().unwrap();
     match state.sessions.get_mut(&session_id) {
         None => Err(AppError::SessionIDDoesNotExist),
         Some(session) => {
             if access_token != session.access_token {
                 return Err(AppError::BadAccessToken);
-            }
-
-            tokio::select! {
-                _ = session.response_notifier.notified() => {},
-                _ = tokio::time::sleep(shared_state.long_poll_duration) => {},
             }
 
             session.access_token_used();
@@ -276,6 +337,8 @@ async fn start_server(listener: TcpListener) -> std::io::Result<()> {
             .app_data(web::Data::new(SharedState {
                 token_timeout: Duration::from_secs(60 * 60 * 24),
                 long_poll_duration: Duration::from_secs(1),
+                max_page_size: 1024 * 1024,
+                max_response_size: 8 * 1024,
                 state: Mutex::new(State {
                     sessions: HashMap::new(),
                 }),
@@ -285,6 +348,7 @@ async fn start_server(listener: TcpListener) -> std::io::Result<()> {
             .service(index)
             .service(set_page)
             .service(get_responses)
+            .service(respond)
     })
     .workers(1)
     .listen(listener)
@@ -357,7 +421,7 @@ mod tests {
             builder.send().await.unwrap()
         }
 
-        async fn request_static(&self, path: &str) -> reqwest::Response {
+        async fn request_static_page(&self, path: &str) -> reqwest::Response {
             self.client
                 .get(format!("{}{}", self.url, path))
                 .send()
@@ -389,7 +453,7 @@ mod tests {
     #[tokio::test]
     async fn static_index_page() {
         let ctx = setup().await;
-        let res = ctx.request_static("/").await;
+        let res = ctx.request_static_page("/").await;
         assert_eq!(res.text().await.unwrap(), get_static_file("index.html"));
     }
 
