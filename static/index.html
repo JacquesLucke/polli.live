@@ -1,1 +1,81 @@
-Welcome on polli.live
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
+    <title>Join Session</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        width: 100%;
+      }
+
+      body {
+        margin: 0;
+        background-color: #ffae4a;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-family: Arial, sans-serif;
+      }
+
+      .container {
+        text-align: center;
+      }
+
+      label {
+        font-size: 18px;
+        display: block;
+        margin-bottom: 10px;
+      }
+
+      input {
+        padding: 10px;
+        font-size: 16px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        width: 200px;
+        margin-bottom: 20px;
+        font-family: monospace;
+      }
+
+      button {
+        padding: 10px 20px;
+        font-size: 16px;
+        color: white;
+        background-color: #333;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background-color: #555;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <input
+        type="text"
+        inputmode="numeric"
+        id="session-id"
+        placeholder="Code"
+      />
+      <button onclick="joinSession()">Join</button>
+    </div>
+
+    <script>
+      function joinSession() {
+        const sessionId = document.getElementById("session-id").value;
+        if (sessionId) {
+          window.location.href = `./page?session=${sessionId}`;
+        }
+      }
+    </script>
+  </body>
+</html>

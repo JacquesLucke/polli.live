@@ -25,11 +25,17 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0")]
     host: String,
 
-    #[arg(long, default_value = "8000")]
+    #[arg(long, default_value = "9000")]
     port: u16,
 
     #[arg(long)]
     root_url: Option<String>,
+
+    #[arg(long, default_value = "1024")]
+    page_size_limit_kb: i64,
+
+    #[arg(long, default_value = "4")]
+    response_size_limit_kb: i64,
 }
 
 #[derive(Debug, Display, Error)]
@@ -110,7 +116,7 @@ impl AccessToken {
 
 #[derive(serde::Deserialize)]
 struct SessionQueryParam {
-    session: Option<String>,
+    session: String,
 }
 
 #[derive(Clone)]
@@ -197,19 +203,19 @@ struct UserResponse {
 }
 
 #[get("/")]
-async fn index(
+async fn index() -> Result<impl Responder, AppError> {
+    Ok(HttpResponse::Ok()
+        .content_type("text/html")
+        .body(get_static_file("index.html")))
+}
+
+#[get("/page")]
+async fn get_page(
     query: web::Query<SessionQueryParam>,
     shared_state: web::Data<SharedState>,
 ) -> Result<impl Responder, AppError> {
-    match &query.session {
-        None => Ok(HttpResponse::Ok()
-            .content_type("text/html")
-            .body(get_static_file("index.html"))),
-        Some(session_id) => {
-            let session_id = SessionID::from_string(&session_id)?;
-            Ok(get_poll_page(session_id, shared_state))
-        }
-    }
+    let session_id = SessionID::from_string(&query.session)?;
+    Ok(get_poll_page(session_id, shared_state))
 }
 
 fn get_poll_page(session_id: SessionID, shared_state: web::Data<SharedState>) -> HttpResponse {
@@ -268,7 +274,7 @@ async fn respond(
     }
 }
 
-#[post("/set_page")]
+#[post("/page")]
 async fn set_page(
     mut page: String,
     query: web::Query<SessionQueryParam>,
@@ -276,8 +282,7 @@ async fn set_page(
     auth: BearerAuth,
 ) -> Result<impl Responder, AppError> {
     let access_token = AccessToken::from_string(auth.token())?;
-    let session_id = query.session.as_ref().ok_or(AppError::BadSessionID)?;
-    let session_id = SessionID::from_string(session_id)?;
+    let session_id = SessionID::from_string(&query.session)?;
 
     if Byte::from_u64(page.len() as u64) > shared_state.settings.max_page_size {
         return Err(AppError::PageTooLarge);
@@ -314,7 +319,7 @@ async fn set_page(
 #[derive(serde::Deserialize)]
 struct GetResponsesParams {
     session: String,
-    start: Option<usize>,
+    start: usize,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -349,13 +354,12 @@ async fn get_responses(
         None => Err(AppError::SessionIDDoesNotExist),
         Some(session) => {
             session.session_used();
-            let start = query.start.unwrap_or(0);
             let mut response = RetrievedResponses {
                 next_start: session.next_response_id,
                 responses_by_user: HashMap::new(),
             };
             for (user_id, user_response) in session.responses.iter_mut() {
-                if user_response.id < start {
+                if user_response.id < query.start {
                     user_response.was_received = true;
                     continue;
                 }
@@ -380,7 +384,7 @@ struct InitSessionResponse {
     token: String,
 }
 
-#[post("/init_session")]
+#[post("/new")]
 async fn init_session(
     req_body: String,
     shared_state: web::Data<SharedState>,
@@ -397,7 +401,7 @@ async fn init_session(
     for retry_i in 0..retries {
         // Todo, safely handle root url.
         let url = format!(
-            "{}/set_page?session={}",
+            "{}/page?session={}",
             shared_state.settings.root_url, next.session
         );
         let client = reqwest::Client::new();
@@ -528,6 +532,7 @@ async fn start_server(
             .wrap(DefaultHeaders::new().add(CacheControl(vec![CacheDirective::NoCache])))
             .wrap(Cors::permissive())
             .service(index)
+            .service(get_page)
             .service(set_page)
             .service(get_responses)
             .service(respond)
@@ -608,8 +613,8 @@ mod tests {
             page: &str,
         ) -> reqwest::Response {
             let url = match session_id {
-                None => format!("{}/set_page", &self.url),
-                Some(session_id) => format!("{}/set_page?session={}", &self.url, session_id),
+                None => format!("{}/page", &self.url),
+                Some(session_id) => format!("{}/page?session={}", &self.url, session_id),
             };
             let mut builder = self.client.post(&url);
             if token.is_some() {

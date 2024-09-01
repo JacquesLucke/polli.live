@@ -14,14 +14,14 @@
       return params.get("session");
     }
 
-    function respond(data) {
+    function respond(data_str) {
       const session = get_session();
       const user = get_user();
       fetch(
         `${window.location.protocol}//${window.location.host}/respond?user=${user}&session=${session}`,
         {
           method: "POST",
-          body: data,
+          body: data_str,
         }
       );
     }
