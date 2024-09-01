@@ -32,10 +32,10 @@ struct Args {
     root_url: Option<String>,
 
     #[arg(long, default_value = "1024")]
-    page_size_limit_kb: i64,
+    page_size_limit_kb: usize,
 
     #[arg(long, default_value = "4")]
-    response_size_limit_kb: i64,
+    response_size_limit_kb: usize,
 }
 
 #[derive(Debug, Display, Error)]
@@ -558,7 +558,11 @@ async fn main() -> std::io::Result<()> {
         .root_url
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", actual_port));
 
-    let settings = Settings::default(root_url);
+    let mut settings = Settings::default(root_url);
+    settings.max_page_size =
+        Byte::from_u64_with_unit(args.page_size_limit_kb as u64, Unit::KB).unwrap();
+    settings.max_response_size =
+        Byte::from_u64_with_unit(args.response_size_limit_kb as u64, Unit::KB).unwrap();
 
     let state = Arc::new(Mutex::new(State {
         ..Default::default()
