@@ -1479,6 +1479,7 @@ dependencies = [
  "clap",
  "derive_more 1.0.0",
  "include_dir",
+ "parking_lot",
  "rand",
  "reqwest",
  "serde",

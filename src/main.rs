@@ -9,14 +9,12 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use derive_more::derive::{Display, Error};
 use include_dir::include_dir;
+use parking_lot::Mutex;
 use rand::rngs::OsRng;
 use rand::Rng;
 use std::net::TcpListener;
 use std::time::Duration;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Notify;
 
 static STATIC_FILES: include_dir::Dir = include_dir!("static");
@@ -215,7 +213,7 @@ async fn index(
 }
 
 fn get_poll_page(session_id: SessionID, shared_state: web::Data<SharedState>) -> HttpResponse {
-    let state = shared_state.state.lock().unwrap();
+    let state = shared_state.state.lock();
     match state.sessions.get(&session_id) {
         None => HttpResponse::NotFound().body(get_static_file("empty_session_page.html")),
         Some(session) => HttpResponse::Ok().body(session.page.clone()),
@@ -246,7 +244,7 @@ async fn respond(
         return Err(AppError::ResponseTooLarge);
     }
 
-    let mut state = shared_state.state.lock().unwrap();
+    let mut state = shared_state.state.lock();
     match state.sessions.get_mut(&session_id) {
         None => Err(AppError::SessionIDDoesNotExist),
         Some(session) => {
@@ -292,7 +290,7 @@ async fn set_page(
         }
     }
 
-    let mut state = shared_state.state.lock().unwrap();
+    let mut state = shared_state.state.lock();
     match state.sessions.get_mut(&session_id) {
         None => {
             state
@@ -333,7 +331,7 @@ async fn get_responses(
     let session_id = SessionID::from_string(&query.session)?;
 
     let notifier = {
-        let mut state = shared_state.state.lock().unwrap();
+        let mut state = shared_state.state.lock();
         match state.sessions.get_mut(&session_id) {
             None => return Err(AppError::SessionIDDoesNotExist),
             Some(session) => session.response_notifier.clone(),
@@ -346,7 +344,7 @@ async fn get_responses(
             _ = tokio::time::sleep(shared_state.settings.long_poll_duration) => {},
         }
     }
-    let mut state = shared_state.state.lock().unwrap();
+    let mut state = shared_state.state.lock();
     match state.sessions.get_mut(&session_id) {
         None => Err(AppError::SessionIDDoesNotExist),
         Some(session) => {
@@ -471,7 +469,7 @@ async fn periodic_cleanup(settings: Settings, state: Arc<Mutex<State>>) {
     let mut interval = tokio::time::interval(settings.cleanup_interval);
     loop {
         interval.tick().await;
-        let mut state = state.lock().unwrap();
+        let mut state = state.lock();
         let now = Utc::now();
 
         // Delete old sessions.
