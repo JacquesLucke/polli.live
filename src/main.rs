@@ -122,7 +122,8 @@ struct SessionQueryParam {
 #[derive(Clone)]
 struct Settings {
     token_timeout: Duration,
-    long_poll_duration: Duration,
+    response_long_poll_duration: Duration,
+    page_update_long_poll_duration: Duration,
     max_response_size: Byte,
     max_page_size: Byte,
     cleanup_interval: Duration,
@@ -135,7 +136,8 @@ impl Settings {
     fn default(root_url: String) -> Self {
         Settings {
             token_timeout: Duration::from_secs(60 * 60 * 24),
-            long_poll_duration: Duration::from_secs(1),
+            response_long_poll_duration: Duration::from_secs(5),
+            page_update_long_poll_duration: Duration::from_secs(30),
             max_page_size: Byte::from_u64_with_unit(1, Unit::MB).unwrap(),
             max_response_size: Byte::from_u64_with_unit(4, Unit::KB).unwrap(),
             cleanup_interval: Duration::from_secs(3),
@@ -165,6 +167,7 @@ impl Default for State {
 
 struct SessionState {
     response_notifier: Arc<Notify>,
+    page_notifier: Arc<Notify>,
     page: String,
     responses: HashMap<UserID, UserResponse>,
     access_token: AccessToken,
@@ -176,6 +179,7 @@ impl SessionState {
     fn new(access_token: AccessToken, page: String) -> SessionState {
         SessionState {
             response_notifier: Arc::new(Notify::new()),
+            page_notifier: Arc::new(Notify::new()),
             page: page,
             responses: HashMap::new(),
             access_token: access_token,
@@ -274,10 +278,16 @@ async fn respond(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct SetPageQueryParams {
+    session: String,
+    notify: Option<bool>,
+}
+
 #[post("/page")]
 async fn set_page(
     mut page: String,
-    query: web::Query<SessionQueryParam>,
+    query: web::Query<SetPageQueryParams>,
     shared_state: web::Data<SharedState>,
     auth: BearerAuth,
 ) -> Result<impl Responder, AppError> {
@@ -288,7 +298,7 @@ async fn set_page(
         return Err(AppError::PageTooLarge);
     }
 
-    match page.find("</body>") {
+    match page.find("</head>") {
         None => {}
         Some(idx) => {
             page.insert_str(idx, &get_static_file("polli_live_injection.html"));
@@ -310,6 +320,9 @@ async fn set_page(
                 *session = SessionState::new(access_token, page);
             } else {
                 session.update(page);
+            }
+            if query.notify.unwrap_or(true) {
+                session.page_notifier.notify_waiters();
             }
         }
     }
@@ -335,18 +348,22 @@ async fn get_responses(
 ) -> Result<impl Responder, AppError> {
     let session_id = SessionID::from_string(&query.session)?;
 
-    let notifier = {
-        let mut state = shared_state.state.lock();
-        match state.sessions.get_mut(&session_id) {
+    let (notifier, next_response_id) = {
+        let state = shared_state.state.lock();
+        match state.sessions.get(&session_id) {
             None => return Err(AppError::SessionIDDoesNotExist),
-            Some(session) => session.response_notifier.clone(),
+            Some(session) => (session.response_notifier.clone(), session.next_response_id),
         }
     };
-    if !shared_state.settings.long_poll_duration.is_zero() {
-        // Don't wait for notifier while the mutex is locked!
-        tokio::select! {
-            _ = notifier.notified() => {},
-            _ = tokio::time::sleep(shared_state.settings.long_poll_duration) => {},
+
+    // Long-poll if there are no new responses available already.
+    if next_response_id <= query.start {
+        if !shared_state.settings.response_long_poll_duration.is_zero() {
+            // Don't wait for notifier while session the mutex is locked!
+            tokio::select! {
+                _ = notifier.notified() => {},
+                _ = tokio::time::sleep(shared_state.settings.response_long_poll_duration) => {},
+            }
         }
     }
     let mut state = shared_state.state.lock();
@@ -369,6 +386,27 @@ async fn get_responses(
             }
             Ok(HttpResponse::Ok().json(response))
         }
+    }
+}
+
+#[get("/wait_for_new_page")]
+async fn wait_for_page(
+    query: web::Query<SessionQueryParam>,
+    shared_state: web::Data<SharedState>,
+) -> Result<impl Responder, AppError> {
+    let session_id = SessionID::from_string(&query.session)?;
+
+    let notifier = {
+        let state = shared_state.state.lock();
+        match state.sessions.get(&session_id) {
+            None => return Err(AppError::SessionIDDoesNotExist),
+            Some(session) => session.page_notifier.clone(),
+        }
+    };
+
+    tokio::select! {
+        _ = notifier.notified() => Ok("reload"),
+        _ = tokio::time::sleep(shared_state.settings.page_update_long_poll_duration) => Ok("wait")
     }
 }
 
@@ -401,7 +439,7 @@ async fn init_session(
     for retry_i in 0..retries {
         // Todo, safely handle root url.
         let url = format!(
-            "{}/page?session={}",
+            "{}/page?session={}&notify=false",
             shared_state.settings.root_url, next.session
         );
         let client = reqwest::Client::new();
@@ -537,6 +575,7 @@ async fn start_server(
             .service(get_responses)
             .service(respond)
             .service(init_session)
+            .service(wait_for_page)
     })
     .workers(1)
     .listen(listener)

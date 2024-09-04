@@ -32,6 +32,10 @@ The [polli.live](https://polli.live) server allows creating interactive polls fo
   - Responds with `{next_start: <id>, responses_by_user: {<user>: <response>}}`
   - Retrieves all responses starting at the given start id.
   - The `start` should be zero at first. After that it should be the retrieved `next_start` value.
+  - This long-polls for a few seconds if there are no new responses available immediately.
 - `GET` `/page?session=<id>`
   - Retrieves page stored for that session or responds with a 404 status code.
   - The server injects some code into the page to provide the `polli_live.respond(data_str)` function that can be used to send data back.
+- `GET` `/wait_for_page?session=<id>`
+  - Long-polls until the a new page has been set for this session, but with a timeout.
+  - Responds with `reload` in the body if the page should be reloaded because it has been changed.

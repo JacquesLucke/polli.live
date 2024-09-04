@@ -14,20 +14,48 @@
       return params.get("session");
     }
 
+    function auto_reload() {
+      const session = get_session();
+      const url = `${get_server_url()}/wait_for_new_page?session=${session}`;
+
+      const handler = async () => {
+        let some_failure = false;
+        try {
+          const res = await fetch(url);
+          if (res.ok) {
+            const text = await res.text();
+            if (text === "reload") {
+              location.reload();
+            }
+          } else {
+            some_failure = true;
+          }
+        } catch {
+          some_failure = true;
+        }
+        setTimeout(handler, some_failure ? 3000 : 0);
+      };
+
+      setTimeout(handler, 0);
+    }
+
+    function get_server_url() {
+      return `${window.location.protocol}//${window.location.host}`;
+    }
+
     function respond(data_str) {
       const session = get_session();
       const user = get_user();
-      fetch(
-        `${window.location.protocol}//${window.location.host}/respond?user=${user}&session=${session}`,
-        {
-          method: "POST",
-          body: data_str,
-        }
-      );
+      const url = `${get_server_url()}/respond?user=${user}&session=${session}`;
+      fetch(url, {
+        method: "POST",
+        body: data_str,
+      });
     }
 
     return {
       respond,
+      auto_reload,
     };
   })();
 </script>
