@@ -1,4 +1,9 @@
-use super::*;
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+use std::net::TcpListener;
+
+use crate::{routes, static_files, user_id::UserID, Settings, State};
 
 struct TestContext {
     handle: tokio::task::JoinHandle<()>,
@@ -109,7 +114,7 @@ async fn setup() -> TestContext {
 
     let url_clone = url.clone();
     let server = tokio::spawn(async move {
-        start_server::start_server(
+        crate::start_server::start_server(
             listener,
             Settings::default(url_clone),
             Arc::new(Mutex::new(State {
@@ -121,7 +126,7 @@ async fn setup() -> TestContext {
     });
 
     // Wait for server to start.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     TestContext {
         handle: server,

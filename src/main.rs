@@ -1,18 +1,26 @@
 use byte_unit::{Byte, Unit};
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use errors::AppError;
 use parking_lot::Mutex;
 use std::net::TcpListener;
-use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Notify;
 
+mod access_token;
 mod cleanup;
 mod errors;
 mod routes;
+mod session_id;
+mod settings;
 mod start_server;
 mod static_files;
+mod user_id;
+
+use access_token::AccessToken;
+use errors::AppError;
+use session_id::SessionID;
+use settings::Settings;
+use user_id::UserID;
 
 #[cfg(test)]
 mod tests;
@@ -36,85 +44,11 @@ struct Args {
     response_size_limit_kb: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct SessionID(String);
-
-impl SessionID {
-    fn from_string(s: &str) -> Result<SessionID, AppError> {
-        if s.is_empty() {
-            Err(AppError::BadSessionID)
-        } else if s.len() > 100 {
-            Err(AppError::BadSessionID)
-        } else {
-            Ok(SessionID(s.to_string()))
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-struct UserID(String);
-
-impl UserID {
-    fn from_string(s: &str) -> Result<UserID, AppError> {
-        if s.is_empty() {
-            Err(AppError::BadUserID)
-        } else if s.len() > 100 {
-            Err(AppError::BadUserID)
-        } else {
-            Ok(UserID(s.to_string()))
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
-struct AccessToken(String);
-
-impl AccessToken {
-    fn from_string(s: &str) -> Result<AccessToken, AppError> {
-        if s.len() < 10 {
-            Err(AppError::BadAccessToken)
-        } else if s.len() > 100 {
-            Err(AppError::BadAccessToken)
-        } else {
-            Ok(AccessToken(s.to_string()))
-        }
-    }
-}
-
 struct UserResponse {
     data: String,
     id: usize,
     was_received: bool,
     time: DateTime<Utc>,
-}
-
-#[derive(Clone)]
-struct Settings {
-    token_timeout: Duration,
-    response_long_poll_duration: Duration,
-    page_update_long_poll_duration: Duration,
-    max_response_size: Byte,
-    max_page_size: Byte,
-    cleanup_interval: Duration,
-    session_keep_alive_duration: Duration,
-    max_memory_usage: Byte,
-    root_url: String,
-}
-
-impl Settings {
-    fn default(root_url: String) -> Self {
-        Settings {
-            token_timeout: Duration::from_secs(60 * 60 * 24),
-            response_long_poll_duration: Duration::from_secs(5),
-            page_update_long_poll_duration: Duration::from_secs(30),
-            max_page_size: Byte::from_u64_with_unit(1, Unit::MB).unwrap(),
-            max_response_size: Byte::from_u64_with_unit(4, Unit::KB).unwrap(),
-            cleanup_interval: Duration::from_secs(3),
-            session_keep_alive_duration: Duration::from_secs(24 * 60 * 60),
-            max_memory_usage: Byte::from_u64_with_unit(500, Unit::MB).unwrap(),
-            root_url: root_url,
-        }
-    }
 }
 
 struct SharedState {
