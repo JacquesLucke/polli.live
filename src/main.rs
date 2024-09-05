@@ -1,10 +1,8 @@
 use byte_unit::{Byte, Unit};
-use chrono::{DateTime, Utc};
 use clap::Parser;
 use parking_lot::Mutex;
 use std::net::TcpListener;
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::Notify;
+use std::sync::Arc;
 
 mod access_token;
 mod cleanup;
@@ -13,6 +11,7 @@ mod routes;
 mod session_id;
 mod settings;
 mod start_server;
+mod state;
 mod static_files;
 mod user_id;
 
@@ -20,6 +19,7 @@ use access_token::AccessToken;
 use errors::AppError;
 use session_id::SessionID;
 use settings::Settings;
+use state::{SessionState, SharedState, State, UserResponse};
 use user_id::UserID;
 
 #[cfg(test)]
@@ -42,64 +42,6 @@ struct Args {
 
     #[arg(long, default_value = "4")]
     response_size_limit_kb: usize,
-}
-
-struct UserResponse {
-    data: String,
-    id: usize,
-    was_received: bool,
-    time: DateTime<Utc>,
-}
-
-struct SharedState {
-    settings: Settings,
-    state: Arc<Mutex<State>>,
-}
-
-struct State {
-    sessions: HashMap<SessionID, SessionState>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        State {
-            sessions: HashMap::new(),
-        }
-    }
-}
-
-struct SessionState {
-    response_notifier: Arc<Notify>,
-    page_notifier: Arc<Notify>,
-    page: String,
-    responses: HashMap<UserID, UserResponse>,
-    access_token: AccessToken,
-    next_response_id: usize,
-    last_request: DateTime<Utc>,
-}
-
-impl SessionState {
-    fn new(access_token: AccessToken, page: String) -> SessionState {
-        SessionState {
-            response_notifier: Arc::new(Notify::new()),
-            page_notifier: Arc::new(Notify::new()),
-            page: page,
-            responses: HashMap::new(),
-            access_token: access_token,
-            next_response_id: 0,
-            last_request: Utc::now(),
-        }
-    }
-
-    fn update(&mut self, page: String) {
-        self.page = page;
-        self.responses.clear();
-        self.session_used();
-    }
-
-    fn session_used(&mut self) {
-        self.last_request = Utc::now();
-    }
 }
 
 #[actix_web::main]
