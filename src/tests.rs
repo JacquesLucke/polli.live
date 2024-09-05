@@ -40,8 +40,8 @@ impl TestContext {
             Some(session_id) => format!("{}/page?session={}", &self.url, session_id),
         };
         let mut builder = self.client.post(&url);
-        if token.is_some() {
-            builder = builder.bearer_auth(token.unwrap());
+        if let Some(token) = token {
+            builder = builder.bearer_auth(token);
         }
         builder = builder.body(page.to_string());
         builder.send().await.unwrap()
@@ -63,11 +63,11 @@ impl TestContext {
     ) -> reqwest::Response {
         let mut url = self.url.clone();
         url.push_str("/respond?");
-        if session_id.is_some() {
-            url.push_str(&format!("session={}&", session_id.unwrap()));
+        if let Some(session_id) = session_id {
+            url.push_str(&format!("session={}&", session_id));
         }
-        if user_id.is_some() {
-            url.push_str(&format!("user={}", user_id.unwrap()));
+        if let Some(user_id) = user_id {
+            url.push_str(&format!("user={}", user_id));
         }
         self.client
             .post(url)
@@ -84,11 +84,11 @@ impl TestContext {
     ) -> reqwest::Response {
         let mut url = self.url.clone();
         url.push_str("/responses?");
-        if session_id.is_some() {
-            url.push_str(&format!("session={}&", session_id.unwrap()));
+        if let Some(session_id) = session_id {
+            url.push_str(&format!("session={}&", session_id));
         }
-        if start.is_some() {
-            url.push_str(&format!("start={}", start.unwrap()));
+        if let Some(start) = start {
+            url.push_str(&format!("start={}", start));
         }
         self.client.get(&url).send().await.unwrap()
     }
