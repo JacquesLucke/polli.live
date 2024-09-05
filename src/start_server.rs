@@ -23,7 +23,7 @@ pub async fn start_server(
             .wrap(Cors::permissive())
             .service(routes::get_index_route)
             .service(routes::get_page_route)
-            .service(routes::set_page_route)
+            .service(routes::post_page_route)
             .service(routes::get_responses_route)
             .service(routes::post_respond_route)
             .service(routes::post_init_session_route)

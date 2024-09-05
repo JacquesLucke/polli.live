@@ -12,7 +12,7 @@ struct SetPageQueryParams {
 }
 
 #[post("/page")]
-async fn set_page_route(
+async fn post_page_route(
     mut page: String,
     query: web::Query<SetPageQueryParams>,
     shared_state: web::Data<SharedState>,
