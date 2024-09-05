@@ -1,23 +1,21 @@
 use actix_cors::Cors;
-use actix_web::http::header::{CacheControl, CacheDirective, ContentType};
-use actix_web::http::StatusCode;
+use actix_web::http::header::{CacheControl, CacheDirective};
 use actix_web::middleware::DefaultHeaders;
-use actix_web::{error, get, post, web, App, HttpResponse, HttpServer, Responder};
-use actix_web_httpauth::extractors::bearer::BearerAuth;
+use actix_web::{web, App, HttpServer};
 use byte_unit::{Byte, Unit};
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use derive_more::derive::{Display, Error};
-use include_dir::include_dir;
+use errors::AppError;
 use parking_lot::Mutex;
-use rand::rngs::OsRng;
-use rand::Rng;
 use std::net::TcpListener;
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Notify;
 
-static STATIC_FILES: include_dir::Dir = include_dir!("static");
+mod cleanup;
+mod errors;
+mod routes;
+mod static_files;
 
 #[derive(Parser, Debug)]
 #[command(version, about)]
@@ -36,37 +34,6 @@ struct Args {
 
     #[arg(long, default_value = "4")]
     response_size_limit_kb: usize,
-}
-
-#[derive(Debug, Display, Error)]
-enum AppError {
-    BadUserID,
-    BadSessionID,
-    BadAccessToken,
-    SessionIDDoesNotExist,
-    PageTooLarge,
-    ResponseTooLarge,
-    ServerError,
-}
-
-impl error::ResponseError for AppError {
-    fn error_response(&self) -> HttpResponse {
-        HttpResponse::build(self.status_code())
-            .insert_header(ContentType::html())
-            .body(self.to_string())
-    }
-
-    fn status_code(&self) -> actix_web::http::StatusCode {
-        match *self {
-            AppError::BadUserID => StatusCode::BAD_REQUEST,
-            AppError::BadSessionID => StatusCode::BAD_REQUEST,
-            AppError::SessionIDDoesNotExist => StatusCode::NOT_FOUND,
-            AppError::BadAccessToken => StatusCode::UNAUTHORIZED,
-            AppError::PageTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            AppError::ResponseTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
-            AppError::ServerError => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -114,9 +81,11 @@ impl AccessToken {
     }
 }
 
-#[derive(serde::Deserialize)]
-struct SessionQueryParam {
-    session: String,
+struct UserResponse {
+    data: String,
+    id: usize,
+    was_received: bool,
+    time: DateTime<Utc>,
 }
 
 #[derive(Clone)]
@@ -199,363 +168,6 @@ impl SessionState {
     }
 }
 
-struct UserResponse {
-    data: String,
-    id: usize,
-    was_received: bool,
-    time: DateTime<Utc>,
-}
-
-#[get("/")]
-async fn index() -> Result<impl Responder, AppError> {
-    Ok(HttpResponse::Ok()
-        .content_type("text/html")
-        .body(get_static_file("index.html")))
-}
-
-#[get("/page")]
-async fn get_page(
-    query: web::Query<SessionQueryParam>,
-    shared_state: web::Data<SharedState>,
-) -> Result<impl Responder, AppError> {
-    let session_id = SessionID::from_string(&query.session)?;
-    Ok(get_poll_page(session_id, shared_state))
-}
-
-fn get_poll_page(session_id: SessionID, shared_state: web::Data<SharedState>) -> HttpResponse {
-    let state = shared_state.state.lock();
-    match state.sessions.get(&session_id) {
-        None => HttpResponse::NotFound().body(get_static_file("empty_session_page.html")),
-        Some(session) => HttpResponse::Ok().body(session.page.clone()),
-    }
-}
-
-fn get_static_file(filename: &str) -> &'static str {
-    let index_html = STATIC_FILES.get_file(filename).unwrap();
-    index_html.contents_utf8().unwrap()
-}
-
-#[derive(serde::Deserialize)]
-struct RespondQueryParams {
-    session: String,
-    user: String,
-}
-
-#[post("/respond")]
-async fn respond(
-    response_data: String,
-    query: web::Query<RespondQueryParams>,
-    shared_state: web::Data<SharedState>,
-) -> Result<impl Responder, AppError> {
-    let session_id = SessionID::from_string(&query.session)?;
-    let user_id = UserID::from_string(&query.user)?;
-
-    if Byte::from_u64(response_data.len() as u64) > shared_state.settings.max_response_size {
-        return Err(AppError::ResponseTooLarge);
-    }
-
-    let mut state = shared_state.state.lock();
-    match state.sessions.get_mut(&session_id) {
-        None => Err(AppError::SessionIDDoesNotExist),
-        Some(session) => {
-            let response_id = session.next_response_id;
-            session.next_response_id += 1;
-
-            session.responses.insert(
-                user_id,
-                UserResponse {
-                    data: response_data,
-                    id: response_id,
-                    was_received: false,
-                    time: Utc::now(),
-                },
-            );
-            session.session_used();
-            session.response_notifier.notify_waiters();
-
-            Ok(HttpResponse::Ok().body("Response updated."))
-        }
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct SetPageQueryParams {
-    session: String,
-    notify: Option<bool>,
-}
-
-#[post("/page")]
-async fn set_page(
-    mut page: String,
-    query: web::Query<SetPageQueryParams>,
-    shared_state: web::Data<SharedState>,
-    auth: BearerAuth,
-) -> Result<impl Responder, AppError> {
-    let access_token = AccessToken::from_string(auth.token())?;
-    let session_id = SessionID::from_string(&query.session)?;
-
-    if Byte::from_u64(page.len() as u64) > shared_state.settings.max_page_size {
-        return Err(AppError::PageTooLarge);
-    }
-
-    match page.find("</head>") {
-        None => {}
-        Some(idx) => {
-            page.insert_str(idx, &get_static_file("polli_live_injection.html"));
-        }
-    }
-
-    let mut state = shared_state.state.lock();
-    match state.sessions.get_mut(&session_id) {
-        None => {
-            state
-                .sessions
-                .insert(session_id, SessionState::new(access_token, page));
-        }
-        Some(session) => {
-            if session.access_token != access_token {
-                if session.last_request + shared_state.settings.token_timeout > Utc::now() {
-                    return Err(AppError::BadAccessToken);
-                }
-                *session = SessionState::new(access_token, page);
-            } else {
-                session.update(page);
-            }
-            if query.notify.unwrap_or(true) {
-                session.page_notifier.notify_waiters();
-            }
-        }
-    }
-    Ok("Page updated.")
-}
-
-#[derive(serde::Deserialize)]
-struct GetResponsesParams {
-    session: String,
-    start: usize,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct RetrievedResponses {
-    next_start: usize,
-    responses_by_user: HashMap<UserID, String>,
-}
-
-#[get("/responses")]
-async fn get_responses(
-    query: web::Query<GetResponsesParams>,
-    shared_state: web::Data<SharedState>,
-) -> Result<impl Responder, AppError> {
-    let session_id = SessionID::from_string(&query.session)?;
-
-    let (notifier, next_response_id) = {
-        let state = shared_state.state.lock();
-        match state.sessions.get(&session_id) {
-            None => return Err(AppError::SessionIDDoesNotExist),
-            Some(session) => (session.response_notifier.clone(), session.next_response_id),
-        }
-    };
-
-    // Long-poll if there are no new responses available already.
-    if next_response_id <= query.start {
-        if !shared_state.settings.response_long_poll_duration.is_zero() {
-            // Don't wait for notifier while session the mutex is locked!
-            tokio::select! {
-                _ = notifier.notified() => {},
-                _ = tokio::time::sleep(shared_state.settings.response_long_poll_duration) => {},
-            }
-        }
-    }
-    let mut state = shared_state.state.lock();
-    match state.sessions.get_mut(&session_id) {
-        None => Err(AppError::SessionIDDoesNotExist),
-        Some(session) => {
-            session.session_used();
-            let mut response = RetrievedResponses {
-                next_start: session.next_response_id,
-                responses_by_user: HashMap::new(),
-            };
-            for (user_id, user_response) in session.responses.iter_mut() {
-                if user_response.id < query.start {
-                    user_response.was_received = true;
-                    continue;
-                }
-                response
-                    .responses_by_user
-                    .insert(user_id.clone(), user_response.data.clone());
-            }
-            Ok(HttpResponse::Ok().json(response))
-        }
-    }
-}
-
-#[get("/wait_for_new_page")]
-async fn wait_for_page(
-    query: web::Query<SessionQueryParam>,
-    shared_state: web::Data<SharedState>,
-) -> Result<impl Responder, AppError> {
-    let session_id = SessionID::from_string(&query.session)?;
-
-    let notifier = {
-        let state = shared_state.state.lock();
-        match state.sessions.get(&session_id) {
-            None => return Err(AppError::SessionIDDoesNotExist),
-            Some(session) => session.page_notifier.clone(),
-        }
-    };
-
-    tokio::select! {
-        _ = notifier.notified() => Ok("reload"),
-        _ = tokio::time::sleep(shared_state.settings.page_update_long_poll_duration) => Ok("wait")
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct DesiredSession {
-    session: String,
-    token: String,
-}
-
-#[derive(serde::Serialize)]
-struct InitSessionResponse {
-    session: String,
-    token: String,
-}
-
-#[post("/new")]
-async fn init_session(
-    req_body: String,
-    shared_state: web::Data<SharedState>,
-) -> Result<impl Responder, AppError> {
-    let mut session_id_length = 6;
-    let mut next: DesiredSession =
-        serde_json::from_str(&req_body).unwrap_or_else(|_| DesiredSession {
-            session: make_random_session_id(session_id_length),
-            token: make_random_access_token(),
-        });
-    let retries = 5;
-    let initial_page = get_static_file("initial_session_page.html");
-
-    for retry_i in 0..retries {
-        // Todo, safely handle root url.
-        let url = format!(
-            "{}/page?session={}&notify=false",
-            shared_state.settings.root_url, next.session
-        );
-        let client = reqwest::Client::new();
-        match client
-            .post(url)
-            .bearer_auth(&next.token)
-            .body(initial_page)
-            .send()
-            .await
-        {
-            Err(_) => {
-                return Err(AppError::ServerError);
-            }
-            Ok(res) => {
-                if res.status() == reqwest::StatusCode::OK {
-                    return Ok(HttpResponse::Ok().json(InitSessionResponse {
-                        session: next.session,
-                        token: next.token,
-                    }));
-                }
-            }
-        }
-
-        if retry_i > 2 {
-            // Increase session id length to increase likelyness to find one that is free.
-            session_id_length += 1;
-        }
-
-        next.session = make_random_session_id(session_id_length);
-        next.token = make_random_access_token();
-    }
-
-    Err(AppError::ServerError)
-}
-
-fn make_random_session_id(length: usize) -> String {
-    let mut rng = rand::thread_rng();
-    (0..length)
-        .map(|_| rng.gen_range(0..10).to_string())
-        .collect()
-}
-
-fn make_random_access_token() -> String {
-    let token_length = 32;
-    let mut rng = OsRng;
-    (0..token_length)
-        .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
-        .collect()
-}
-
-fn count_user_memory_usage(state: &State) -> Byte {
-    let mut used_bytes: usize = 0;
-    for (session_id, session) in &state.sessions {
-        used_bytes += session_id.0.len() + session.page.len() + session.access_token.0.len();
-        for (user_id, user_response) in &session.responses {
-            used_bytes += user_id.0.len() + user_response.data.len();
-        }
-        used_bytes += size_of::<UserResponse>() * session.responses.capacity();
-    }
-    used_bytes += size_of::<SessionState>() * state.sessions.capacity();
-    Byte::from_u64(used_bytes as u64)
-}
-
-fn get_memory_usage_with_safety_buffer(state: &State) -> Byte {
-    count_user_memory_usage(state).multiply(2).unwrap()
-}
-
-async fn periodic_cleanup(settings: Settings, state: Arc<Mutex<State>>) {
-    let mut interval = tokio::time::interval(settings.cleanup_interval);
-    loop {
-        interval.tick().await;
-        let mut state = state.lock();
-        let now = Utc::now();
-
-        // Delete old sessions.
-        state.sessions.retain(|_, session| {
-            return session.last_request + settings.session_keep_alive_duration > now;
-        });
-
-        // Count used memory with a safety buffer in case more drastic measures to free
-        // memory have to be taken.
-        let used_bytes = get_memory_usage_with_safety_buffer(&state);
-        if used_bytes < settings.max_memory_usage {
-            // Enough memory is available. No need to do anything else.
-            continue;
-        }
-
-        // Free responses that should have been received by all interested parties already.
-        for (_, session) in &mut state.sessions {
-            session.responses.retain(|_, user_response| {
-                return user_response.was_received
-                    && user_response.time + Duration::from_secs(30) > now;
-            });
-        }
-
-        let used_bytes = get_memory_usage_with_safety_buffer(&state);
-        if used_bytes < settings.max_memory_usage {
-            // Looks like nothing else has to be freed.
-            continue;
-        }
-
-        // If all above did not help, it's likely that there is some kind of attack.
-        // It's not really something we can protect against at this level. Best we
-        // can do is to just free everything that wasn't used a few seconds ago.
-        // Valid users should use this system in real-time and should have received
-        // responses in less than a few seconds already.
-        state.sessions.retain(|_, session| {
-            return session.last_request + Duration::from_secs(5) > now;
-        });
-        state.sessions.shrink_to_fit();
-        for (_, session) in &mut state.sessions {
-            session.responses.shrink_to_fit();
-        }
-    }
-}
-
 async fn start_server(
     listener: TcpListener,
     settings: Settings,
@@ -569,13 +181,13 @@ async fn start_server(
             }))
             .wrap(DefaultHeaders::new().add(CacheControl(vec![CacheDirective::NoCache])))
             .wrap(Cors::permissive())
-            .service(index)
-            .service(get_page)
-            .service(set_page)
-            .service(get_responses)
-            .service(respond)
-            .service(init_session)
-            .service(wait_for_page)
+            .service(routes::get_index_route)
+            .service(routes::get_page_route)
+            .service(routes::set_page_route)
+            .service(routes::get_responses_route)
+            .service(routes::post_respond_route)
+            .service(routes::post_init_session_route)
+            .service(routes::get_wait_for_page_route)
     })
     .workers(1)
     .listen(listener)
@@ -610,7 +222,7 @@ async fn main() -> std::io::Result<()> {
     let settings_clone = settings.clone();
     let state_clone = state.clone();
     tokio::spawn(async move {
-        periodic_cleanup(settings_clone, state_clone).await;
+        cleanup::do_periodic_cleanup(settings_clone, state_clone).await;
     });
 
     start_server(listener, settings, state).await
@@ -746,7 +358,7 @@ mod tests {
     async fn static_index_page() {
         let ctx = setup().await;
         let res = ctx.request_static_page("/").await;
-        assert_eq!(res.text().await.unwrap(), get_static_file("index.html"));
+        assert_eq!(res.text().await.unwrap(), static_files::get("index.html"));
     }
 
     #[tokio::test]
@@ -843,7 +455,7 @@ mod tests {
 
         let res = ctx.request_responses(Some(&session)).await;
         assert_eq!(res.status(), reqwest::StatusCode::OK);
-        let result: RetrievedResponses = res.json().await.unwrap();
+        let result: routes::RetrievedResponses = res.json().await.unwrap();
         assert_eq!(result.next_start, 1);
         assert_eq!(result.responses_by_user.len(), 1);
         assert_eq!(
