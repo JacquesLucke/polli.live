@@ -1,0 +1,236 @@
+use super::*;
+
+struct TestContext {
+    handle: tokio::task::JoinHandle<()>,
+    url: String,
+    client: reqwest::Client,
+}
+
+impl Drop for TestContext {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+impl TestContext {
+    async fn request_session_page_text(&self, session_id: &str) -> String {
+        self.request_session_page(session_id)
+            .await
+            .text()
+            .await
+            .unwrap()
+    }
+
+    async fn request_session_page(&self, session_id: &str) -> reqwest::Response {
+        self.client
+            .get(format!("{}?session={}", &self.url, &session_id))
+            .send()
+            .await
+            .unwrap()
+    }
+
+    async fn request_page_update(
+        &self,
+        session_id: Option<&str>,
+        token: Option<&str>,
+        page: &str,
+    ) -> reqwest::Response {
+        let url = match session_id {
+            None => format!("{}/page", &self.url),
+            Some(session_id) => format!("{}/page?session={}", &self.url, session_id),
+        };
+        let mut builder = self.client.post(&url);
+        if token.is_some() {
+            builder = builder.bearer_auth(token.unwrap());
+        }
+        builder = builder.body(page.to_string());
+        builder.send().await.unwrap()
+    }
+
+    async fn set_page_and_check(&self, session_id: &str, token: &str, page: &str) {
+        let res = self
+            .request_page_update(Some(session_id), Some(token), page)
+            .await;
+        assert_eq!(res.status(), reqwest::StatusCode::OK);
+        assert_eq!(self.request_session_page_text(session_id).await, page);
+    }
+
+    async fn send_reponse(
+        &self,
+        session_id: Option<&str>,
+        user_id: Option<&str>,
+        response_data: &str,
+    ) -> reqwest::Response {
+        let mut url = self.url.clone();
+        url.push_str("/respond?");
+        if session_id.is_some() {
+            url.push_str(&format!("session={}&", session_id.unwrap()));
+        }
+        if user_id.is_some() {
+            url.push_str(&format!("user={}", user_id.unwrap()));
+        }
+        self.client
+            .post(url)
+            .body(response_data.to_string())
+            .send()
+            .await
+            .unwrap()
+    }
+
+    async fn request_responses(&self, session_id: Option<&str>) -> reqwest::Response {
+        let url = match session_id {
+            None => format!("{}/responses", &self.url),
+            Some(session_id) => format!("{}/responses?session={}", &self.url, session_id),
+        };
+        self.client.get(&url).send().await.unwrap()
+    }
+
+    async fn request_static_page(&self, path: &str) -> reqwest::Response {
+        self.client
+            .get(format!("{}{}", self.url, path))
+            .send()
+            .await
+            .unwrap()
+    }
+}
+
+async fn setup() -> TestContext {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to random port");
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{}", port);
+
+    let url_clone = url.clone();
+    let server = tokio::spawn(async move {
+        start_server::start_server(
+            listener,
+            Settings::default(url_clone),
+            Arc::new(Mutex::new(State {
+                ..Default::default()
+            })),
+        )
+        .await
+        .expect("failed to start server");
+    });
+
+    // Wait for server to start.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    TestContext {
+        handle: server,
+        url: url,
+        client: reqwest::Client::new(),
+    }
+}
+
+#[tokio::test]
+async fn static_index_page() {
+    let ctx = setup().await;
+    let res = ctx.request_static_page("/").await;
+    assert_eq!(res.text().await.unwrap(), static_files::get("index.html"));
+}
+
+#[tokio::test]
+async fn not_found_session_page() {
+    let ctx = setup().await;
+    let res = ctx.request_session_page("1").await;
+    assert_eq!(res.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn set_page_without_token() {
+    let ctx = setup().await;
+    let res = ctx.request_page_update(Some("1"), None, "test").await;
+    assert_eq!(res.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn set_page_and_request() {
+    let ctx = setup().await;
+
+    let page = "my test page";
+
+    let res = ctx
+        .request_page_update(Some("1"), Some("my-test-token"), page)
+        .await;
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+
+    let res = ctx.request_session_page("1").await;
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(res.text().await.unwrap(), page);
+}
+
+#[tokio::test]
+async fn set_page_twice_with_same_token() {
+    let ctx = setup().await;
+
+    let session = "a";
+    let token = "my-test-token";
+    let page_1 = "page one";
+    let page_2 = "page two";
+
+    let res = ctx
+        .request_page_update(Some(session), Some(token), "page one")
+        .await;
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(ctx.request_session_page_text(session).await, page_1);
+
+    let res = ctx
+        .request_page_update(Some(session), Some(token), page_2)
+        .await;
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(ctx.request_session_page_text(session).await, page_2);
+}
+
+#[tokio::test]
+async fn try_update_page_with_other_token() {
+    let ctx = setup().await;
+
+    let session = "b";
+    let token_1 = "my-first-token";
+    let token_2 = "my-second-token";
+    let page_1 = "page 1";
+    let page_2 = "page 2";
+
+    let res = ctx
+        .request_page_update(Some(session), Some(token_1), page_1)
+        .await;
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    assert_eq!(ctx.request_session_page_text(session).await, page_1);
+
+    let res = ctx
+        .request_page_update(Some(session), Some(token_2), page_2)
+        .await;
+    assert_eq!(res.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(ctx.request_session_page_text(session).await, page_1);
+}
+
+#[tokio::test]
+async fn single_response() {
+    let ctx = setup().await;
+
+    let session = "c";
+    let token = "my-test-token";
+    let page = "test page";
+    let user = "me";
+    let response_data = "42";
+
+    ctx.set_page_and_check(session, token, page).await;
+
+    let res = ctx
+        .send_reponse(Some(session), Some(user), response_data)
+        .await;
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+
+    let res = ctx.request_responses(Some(&session)).await;
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    let result: routes::RetrievedResponses = res.json().await.unwrap();
+    assert_eq!(result.next_start, 1);
+    assert_eq!(result.responses_by_user.len(), 1);
+    assert_eq!(
+        result
+            .responses_by_user
+            .get(&UserID::from_string(user).unwrap())
+            .unwrap(),
+        response_data
+    );
+}
