@@ -23,7 +23,7 @@ impl TestContext {
 
     async fn request_session_page(&self, session_id: &str) -> reqwest::Response {
         self.client
-            .get(format!("{}?session={}", &self.url, &session_id))
+            .get(format!("{}/page?session={}", &self.url, &session_id))
             .send()
             .await
             .unwrap()
@@ -77,11 +77,19 @@ impl TestContext {
             .unwrap()
     }
 
-    async fn request_responses(&self, session_id: Option<&str>) -> reqwest::Response {
-        let url = match session_id {
-            None => format!("{}/responses", &self.url),
-            Some(session_id) => format!("{}/responses?session={}", &self.url, session_id),
-        };
+    async fn request_responses(
+        &self,
+        session_id: Option<&str>,
+        start: Option<usize>,
+    ) -> reqwest::Response {
+        let mut url = self.url.clone();
+        url.push_str("/responses?");
+        if session_id.is_some() {
+            url.push_str(&format!("session={}&", session_id.unwrap()));
+        }
+        if start.is_some() {
+            url.push_str(&format!("start={}", start.unwrap()));
+        }
         self.client.get(&url).send().await.unwrap()
     }
 
@@ -221,7 +229,7 @@ async fn single_response() {
         .await;
     assert_eq!(res.status(), reqwest::StatusCode::OK);
 
-    let res = ctx.request_responses(Some(&session)).await;
+    let res = ctx.request_responses(Some(&session), Some(0)).await;
     assert_eq!(res.status(), reqwest::StatusCode::OK);
     let result: routes::RetrievedResponses = res.json().await.unwrap();
     assert_eq!(result.next_start, 1);
