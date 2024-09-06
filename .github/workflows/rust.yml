@@ -1,4 +1,6 @@
 name: Build
+permissions:
+  contents: write
 on: [push]
 jobs:
   build:
@@ -61,6 +63,6 @@ jobs:
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
           title: "Development Build"
-          files: polli-live-*
+          files: polli-live-linux-x64/polli-live
           prerelease: true
           tag_name: "latest"
