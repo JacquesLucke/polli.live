@@ -65,7 +65,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          title: "Development Build"
           files: polli-live-*/*
           prerelease: true
           tag_name: "latest"
+          name: "Latest"
+          body: ""
