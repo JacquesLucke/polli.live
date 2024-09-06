@@ -47,5 +47,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: polli-live-${{ matrix.build_name }}
+          name: polli-live-${{ matrix.name }}
           path: "./target/${{ matrix.target }}/release/${{ matrix.build_name }}"
