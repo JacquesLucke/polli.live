@@ -4,10 +4,8 @@ permissions:
 on: [push]
 jobs:
   build:
-    # Set the job to run on the platform specified by the matrix below
     runs-on: ${{ matrix.runner }}
 
-    # Define the build matrix for cross-compilation
     strategy:
       matrix:
         include:
@@ -28,7 +26,6 @@ jobs:
             target: aarch64-apple-darwin
             build_name: polli-live
 
-    # The steps to run for each matrix item
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,7 +61,6 @@ jobs:
       - uses: actions/download-artifact@v4
       - uses: softprops/action-gh-release@v2
         with:
-          repo_token: "${{ secrets.GITHUB_TOKEN }}"
           files: polli-live-*/*
           prerelease: true
           tag_name: "latest"
