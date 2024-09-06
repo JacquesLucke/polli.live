@@ -49,3 +49,13 @@ jobs:
         with:
           name: polli-live-${{ matrix.name }}
           path: "./target/${{ matrix.target }}/release/${{ matrix.build_name }}"
+
+  deploy:
+    name: Deploy Latest
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Display downloaded files
+        run: ls -R
