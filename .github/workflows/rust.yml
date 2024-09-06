@@ -47,10 +47,13 @@ jobs:
       - name: Test
         run: cargo test --verbose --locked --release --target ${{ matrix.target }}
 
+      - name: Rename Executable
+        run: cp ./target/${{ matrix.target }}/release/${{ matrix.build_name }} polli-live-${{ matrix.name }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: polli-live-${{ matrix.name }}
-          path: "./target/${{ matrix.target }}/release/${{ matrix.build_name }}"
+          path: polli-live-${{ matrix.name }}
 
   deploy:
     name: Deploy Latest
@@ -59,12 +62,10 @@ jobs:
     if: github.event_name == 'push'
     steps:
       - uses: actions/download-artifact@v4
-      - name: Rename Executables
-        run: mv polli-live-linux-x64/polli-live polli-live-linux-x64
       - uses: softprops/action-gh-release@v2
         with:
           repo_token: "${{ secrets.GITHUB_TOKEN }}"
           title: "Development Build"
-          files: polli-live-*
+          files: polli-live-*/*
           prerelease: true
           tag_name: "latest"
