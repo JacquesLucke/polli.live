@@ -70,8 +70,17 @@
     </div>
 
     <script>
+      const session_id_elem = document.getElementById("session-id");
+
+      session_id_elem.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          joinSession();
+        }
+      });
+
       function joinSession() {
-        const sessionId = document.getElementById("session-id").value;
+        const sessionId = session_id_elem.value;
         if (sessionId) {
           window.location.href = `./page?session=${sessionId}`;
         }
