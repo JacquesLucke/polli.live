@@ -43,3 +43,7 @@ jobs:
 
       - name: Test
         run: cargo test --verbose --locked --release --target ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          path: "./target/${{ matrix.target }}/release/${PROJECT_NAME}"
