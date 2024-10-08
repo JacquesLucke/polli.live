@@ -9,13 +9,13 @@
       return user_id;
     }
 
-    function get_session() {
+    function get_session_id() {
       const params = new URLSearchParams(window.location.search);
       return params.get("session");
     }
 
     function auto_reload() {
-      const session = get_session();
+      const session = get_session_id();
       const url = `${get_server_url()}/wait_for_new_page?session=${session}`;
 
       const handler = async () => {
@@ -49,7 +49,7 @@
     }
 
     function respond(data_str) {
-      const session = get_session();
+      const session = get_session_id();
       const user = get_user();
       const url = `${get_server_url()}/respond?user=${user}&session=${session}`;
       fetch(url, {
@@ -61,6 +61,7 @@
     return {
       respond,
       auto_reload,
+      get_session_id,
     };
   })();
 </script>
