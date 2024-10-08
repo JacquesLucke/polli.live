@@ -37,6 +37,11 @@
       };
 
       setTimeout(handler, 0);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          location.reload();
+        }
+      });
     }
 
     function get_server_url() {
