@@ -2,6 +2,8 @@
 
 The [polli.live](https://polli.live) server allows creating interactive polls for presentations. It's a fairly simple server that leaves most user-interface decisions to the talk author. It's mainly intended to be used with [revealjs](https://revealjs.com/) presentations but the server is independent of that.
 
+See [here](https://github.com/JacquesLucke/evaluating_geometry_nodes_talk) for an example usage.
+
 ### Design Principles
 
 - The server should not have to change to accomondate different kinds of polls.
