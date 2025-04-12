@@ -1,7 +1,7 @@
-use actix_web::{get, web, HttpResponse, Responder};
+use actix_web::{HttpResponse, Responder, get, web};
 use std::collections::HashMap;
 
-use crate::{errors::AppError, SessionID, SharedState, UserID};
+use crate::{SessionID, SharedState, UserID, errors::AppError};
 
 #[derive(serde::Deserialize)]
 struct GetResponsesParams {
@@ -31,13 +31,13 @@ async fn get_responses_route(
     };
 
     // Long-poll if there are no new responses available already.
-    if next_response_id <= query.start {
-        if !shared_state.settings.response_long_poll_duration.is_zero() {
-            // Don't wait for notifier while session the mutex is locked!
-            tokio::select! {
-                _ = notifier.notified() => {},
-                _ = tokio::time::sleep(shared_state.settings.response_long_poll_duration) => {},
-            }
+    if next_response_id <= query.start
+        && !shared_state.settings.response_long_poll_duration.is_zero()
+    {
+        // Don't wait for notifier while session the mutex is locked!
+        tokio::select! {
+            _ = notifier.notified() => {},
+            _ = tokio::time::sleep(shared_state.settings.response_long_poll_duration) => {},
         }
     }
     let mut state = shared_state.state.lock();

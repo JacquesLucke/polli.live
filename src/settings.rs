@@ -25,7 +25,7 @@ impl Settings {
             cleanup_interval: Duration::from_secs(3),
             session_keep_alive_duration: Duration::from_secs(24 * 60 * 60),
             max_memory_usage: Byte::from_u64_with_unit(500, Unit::MB).unwrap(),
-            root_url: root_url,
+            root_url,
         }
     }
 }

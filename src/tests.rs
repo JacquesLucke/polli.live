@@ -3,7 +3,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use std::net::TcpListener;
 
-use crate::{routes, static_files, user_id::UserID, Settings, State};
+use crate::{Settings, State, routes, static_files, user_id::UserID};
 
 struct TestContext {
     handle: tokio::task::JoinHandle<()>,
@@ -130,7 +130,7 @@ async fn setup() -> TestContext {
 
     TestContext {
         handle: server,
-        url: url,
+        url,
         client: reqwest::Client::new(),
     }
 }
@@ -234,7 +234,7 @@ async fn single_response() {
         .await;
     assert_eq!(res.status(), reqwest::StatusCode::OK);
 
-    let res = ctx.request_responses(Some(&session), Some(0)).await;
+    let res = ctx.request_responses(Some(session), Some(0)).await;
     assert_eq!(res.status(), reqwest::StatusCode::OK);
     let result: routes::RetrievedResponses = res.json().await.unwrap();
     assert_eq!(result.next_start, 1);

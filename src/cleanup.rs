@@ -14,9 +14,9 @@ pub async fn do_periodic_cleanup(settings: Settings, state: Arc<Mutex<State>>) {
         let now = Utc::now();
 
         // Delete old sessions.
-        state.sessions.retain(|_, session| {
-            return session.last_request + settings.session_keep_alive_duration > now;
-        });
+        state
+            .sessions
+            .retain(|_, session| session.last_request + settings.session_keep_alive_duration > now);
 
         // Count used memory with a safety buffer in case more drastic measures to free
         // memory have to be taken.
@@ -27,10 +27,9 @@ pub async fn do_periodic_cleanup(settings: Settings, state: Arc<Mutex<State>>) {
         }
 
         // Free responses that should have been received by all interested parties already.
-        for (_, session) in &mut state.sessions {
+        for session in state.sessions.values_mut() {
             session.responses.retain(|_, user_response| {
-                return user_response.was_received
-                    && user_response.time + Duration::from_secs(30) > now;
+                user_response.was_received && user_response.time + Duration::from_secs(30) > now
             });
         }
 
@@ -45,11 +44,11 @@ pub async fn do_periodic_cleanup(settings: Settings, state: Arc<Mutex<State>>) {
         // can do is to just free everything that wasn't used a few seconds ago.
         // Valid users should use this system in real-time and should have received
         // responses in less than a few seconds already.
-        state.sessions.retain(|_, session| {
-            return session.last_request + Duration::from_secs(5) > now;
-        });
+        state
+            .sessions
+            .retain(|_, session| session.last_request + Duration::from_secs(5) > now);
         state.sessions.shrink_to_fit();
-        for (_, session) in &mut state.sessions {
+        for session in state.sessions.values_mut() {
             session.responses.shrink_to_fit();
         }
     }

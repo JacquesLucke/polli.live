@@ -5,9 +5,7 @@ pub struct AccessToken(pub String);
 
 impl AccessToken {
     pub fn from_string(s: &str) -> Result<AccessToken, AppError> {
-        if s.len() < 10 {
-            Err(AppError::BadAccessToken)
-        } else if s.len() > 100 {
+        if s.len() < 10 || s.len() > 100 {
             Err(AppError::BadAccessToken)
         } else {
             Ok(AccessToken(s.to_string()))

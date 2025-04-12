@@ -10,6 +10,7 @@ pub struct SharedState {
     pub state: Arc<Mutex<State>>,
 }
 
+#[derive(Default)]
 pub struct State {
     pub sessions: HashMap<SessionID, SessionState>,
 }
@@ -31,22 +32,14 @@ pub struct UserResponse {
     pub time: DateTime<Utc>,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        State {
-            sessions: HashMap::new(),
-        }
-    }
-}
-
 impl SessionState {
     pub fn new(access_token: AccessToken, page: String) -> SessionState {
         SessionState {
             response_notifier: Arc::new(Notify::new()),
             page_notifier: Arc::new(Notify::new()),
-            page: page,
+            page,
             responses: HashMap::new(),
-            access_token: access_token,
+            access_token,
             next_response_id: 0,
             last_request: Utc::now(),
         }

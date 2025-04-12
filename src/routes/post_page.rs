@@ -1,9 +1,9 @@
-use actix_web::{post, web, Responder};
+use actix_web::{Responder, post, web};
 use actix_web_httpauth::extractors::bearer::BearerAuth;
 use byte_unit::Byte;
 use chrono::Utc;
 
-use crate::{errors::AppError, static_files, AccessToken, SessionID, SessionState, SharedState};
+use crate::{AccessToken, SessionID, SessionState, SharedState, errors::AppError, static_files};
 
 #[derive(serde::Deserialize)]
 struct SetPageQueryParams {
@@ -28,7 +28,7 @@ async fn post_page_route(
     match page.find("</head>") {
         None => {}
         Some(idx) => {
-            page.insert_str(idx, &static_files::get("polli_live_injection.html"));
+            page.insert_str(idx, static_files::get("polli_live_injection.html"));
         }
     }
 
