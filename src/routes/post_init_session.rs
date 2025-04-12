@@ -1,8 +1,7 @@
-use actix_web::{post, web, HttpResponse, Responder};
-use rand::rngs::OsRng;
+use actix_web::{HttpResponse, Responder, post, web};
 use rand::Rng;
 
-use crate::{errors::AppError, static_files, SharedState};
+use crate::{SharedState, errors::AppError, static_files};
 
 #[derive(serde::Deserialize)]
 struct DesiredSession {
@@ -70,16 +69,16 @@ async fn post_init_session_route(
 }
 
 fn make_random_session_id(length: usize) -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..length)
-        .map(|_| rng.gen_range(0..10).to_string())
+        .map(|_| rng.random_range(0..10).to_string())
         .collect()
 }
 
 fn make_random_access_token() -> String {
-    let token_length = 32;
-    let mut rng = OsRng;
-    (0..token_length)
-        .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
-        .collect()
+    let mut buf = [0u8; 32];
+    if getrandom::fill(&mut buf).is_err() {
+        panic!("Cannot generate random access tokens");
+    }
+    hex::encode(buf)
 }
