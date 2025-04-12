@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used)]
+
 use crate::AppError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

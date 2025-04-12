@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used)]
+
 use byte_unit::Byte;
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -55,7 +57,8 @@ pub async fn do_periodic_cleanup(settings: Settings, state: Arc<Mutex<State>>) {
 }
 
 fn get_memory_usage_with_safety_buffer(state: &State) -> Byte {
-    count_user_memory_usage(state).multiply(2).unwrap()
+    let memory_usage = count_user_memory_usage(state);
+    memory_usage.multiply(2).unwrap_or(Byte::from_u64(u64::MAX))
 }
 
 fn count_user_memory_usage(state: &State) -> Byte {

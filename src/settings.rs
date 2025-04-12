@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used)]
+
 use byte_unit::{Byte, Unit};
 use std::time::Duration;
 
@@ -20,11 +22,11 @@ impl Settings {
             token_timeout: Duration::from_secs(60 * 60 * 24),
             response_long_poll_duration: Duration::from_secs(5),
             page_update_long_poll_duration: Duration::from_secs(30),
-            max_page_size: Byte::from_u64_with_unit(1, Unit::MB).unwrap(),
-            max_response_size: Byte::from_u64_with_unit(4, Unit::KB).unwrap(),
+            max_page_size: Byte::from_u64_with_unit(1, Unit::MB).expect("valid"),
+            max_response_size: Byte::from_u64_with_unit(4, Unit::KB).expect("valid"),
             cleanup_interval: Duration::from_secs(3),
             session_keep_alive_duration: Duration::from_secs(24 * 60 * 60),
-            max_memory_usage: Byte::from_u64_with_unit(500, Unit::MB).unwrap(),
+            max_memory_usage: Byte::from_u64_with_unit(500, Unit::MB).expect("valid"),
             root_url,
         }
     }

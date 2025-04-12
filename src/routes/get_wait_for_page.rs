@@ -1,6 +1,8 @@
-use actix_web::{get, web, Responder};
+#![deny(clippy::unwrap_used)]
 
-use crate::{errors::AppError, SessionID, SharedState};
+use actix_web::{Responder, get, web};
+
+use crate::{SessionID, SharedState, errors::AppError};
 
 #[derive(serde::Deserialize)]
 struct QueryParams {

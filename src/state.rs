@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used)]
+
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::{collections::HashMap, sync::Arc};

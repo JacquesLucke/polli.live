@@ -23,7 +23,7 @@ impl TestContext {
             .await
             .text()
             .await
-            .unwrap()
+            .expect("")
     }
 
     async fn request_session_page(&self, session_id: &str) -> reqwest::Response {
@@ -31,7 +31,7 @@ impl TestContext {
             .get(format!("{}/page?session={}", &self.url, &session_id))
             .send()
             .await
-            .unwrap()
+            .expect("")
     }
 
     async fn request_page_update(
@@ -49,7 +49,7 @@ impl TestContext {
             builder = builder.bearer_auth(token);
         }
         builder = builder.body(page.to_string());
-        builder.send().await.unwrap()
+        builder.send().await.expect("")
     }
 
     async fn set_page_and_check(&self, session_id: &str, token: &str, page: &str) {
@@ -79,7 +79,7 @@ impl TestContext {
             .body(response_data.to_string())
             .send()
             .await
-            .unwrap()
+            .expect("")
     }
 
     async fn request_responses(
@@ -95,7 +95,7 @@ impl TestContext {
         if let Some(start) = start {
             url.push_str(&format!("start={}", start));
         }
-        self.client.get(&url).send().await.unwrap()
+        self.client.get(&url).send().await.expect("")
     }
 
     async fn request_static_page(&self, path: &str) -> reqwest::Response {
@@ -103,13 +103,13 @@ impl TestContext {
             .get(format!("{}{}", self.url, path))
             .send()
             .await
-            .unwrap()
+            .expect("")
     }
 }
 
 async fn setup() -> TestContext {
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to random port");
-    let port = listener.local_addr().unwrap().port();
+    let port = listener.local_addr().expect("").port();
     let url = format!("http://127.0.0.1:{}", port);
 
     let url_clone = url.clone();
@@ -139,7 +139,10 @@ async fn setup() -> TestContext {
 async fn static_index_page() {
     let ctx = setup().await;
     let res = ctx.request_static_page("/").await;
-    assert_eq!(res.text().await.unwrap(), static_files::get("index.html"));
+    assert_eq!(
+        res.text().await.expect(""),
+        static_files::get("index.html").expect("valid")
+    );
 }
 
 #[tokio::test]
@@ -169,7 +172,7 @@ async fn set_page_and_request() {
 
     let res = ctx.request_session_page("1").await;
     assert_eq!(res.status(), reqwest::StatusCode::OK);
-    assert_eq!(res.text().await.unwrap(), page);
+    assert_eq!(res.text().await.expect(""), page);
 }
 
 #[tokio::test]
@@ -236,14 +239,14 @@ async fn single_response() {
 
     let res = ctx.request_responses(Some(session), Some(0)).await;
     assert_eq!(res.status(), reqwest::StatusCode::OK);
-    let result: routes::RetrievedResponses = res.json().await.unwrap();
+    let result: routes::RetrievedResponses = res.json().await.expect("");
     assert_eq!(result.next_start, 1);
     assert_eq!(result.responses_by_user.len(), 1);
     assert_eq!(
         result
             .responses_by_user
-            .get(&UserID::from_string(user).unwrap())
-            .unwrap(),
+            .get(&UserID::from_string(user).expect(""))
+            .expect(""),
         response_data
     );
 }

@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used)]
+
 use actix_web::{HttpResponse, Responder, get};
 
 use crate::{errors::AppError, static_files};
@@ -6,5 +8,5 @@ use crate::{errors::AppError, static_files};
 async fn get_index_route() -> Result<impl Responder, AppError> {
     Ok(HttpResponse::Ok()
         .content_type("text/html")
-        .body(static_files::get("index.html")))
+        .body(static_files::get("index.html").expect("valid")))
 }

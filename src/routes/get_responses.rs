@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used)]
+
 use actix_web::{HttpResponse, Responder, get, web};
 use std::collections::HashMap;
 

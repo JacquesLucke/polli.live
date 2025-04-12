@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used)]
+
 use actix_web::{HttpResponse, Responder, post, web};
 use rand::Rng;
 
@@ -27,7 +29,7 @@ async fn post_init_session_route(
             token: make_random_access_token(),
         });
     let retries = 5;
-    let initial_page = static_files::get("initial_session_page.html");
+    let initial_page = static_files::get("initial_session_page.html").expect("valid");
 
     for retry_i in 0..retries {
         // Todo, safely handle root url.

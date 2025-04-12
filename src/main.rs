@@ -1,4 +1,6 @@
-use byte_unit::{Byte, Unit};
+#![deny(clippy::unwrap_used)]
+
+use byte_unit::Byte;
 use clap::Parser;
 use parking_lot::Mutex;
 use std::net::TcpListener;
@@ -16,6 +18,7 @@ mod static_files;
 mod user_id;
 
 use access_token::AccessToken;
+use anyhow::Result;
 use errors::AppError;
 use session_id::SessionID;
 use settings::Settings;
@@ -37,19 +40,22 @@ struct Args {
     #[arg(long)]
     root_url: Option<String>,
 
-    #[arg(long, default_value = "1024")]
-    page_size_limit_kb: usize,
+    #[arg(long, default_value = "1mb")]
+    page_size_limit: Byte,
 
-    #[arg(long, default_value = "4")]
-    response_size_limit_kb: usize,
+    #[arg(long, default_value = "4kb")]
+    response_size_limit: Byte,
 }
 
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     let listener = TcpListener::bind((args.host.clone(), args.port)).expect("Cannot bind to port");
-    let actual_port = listener.local_addr().unwrap().port();
+    let Ok(local_addr) = listener.local_addr() else {
+        return Err(anyhow::anyhow!("Cannot get local address"));
+    };
+    let actual_port = local_addr.port();
 
     println!("Start server on http://{}:{}", args.host, actual_port);
 
@@ -58,10 +64,8 @@ async fn main() -> std::io::Result<()> {
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", actual_port));
 
     let mut settings = Settings::default(root_url);
-    settings.max_page_size =
-        Byte::from_u64_with_unit(args.page_size_limit_kb as u64, Unit::KB).unwrap();
-    settings.max_response_size =
-        Byte::from_u64_with_unit(args.response_size_limit_kb as u64, Unit::KB).unwrap();
+    settings.max_page_size = args.page_size_limit;
+    settings.max_response_size = args.response_size_limit;
 
     let state = Arc::new(Mutex::new(State {
         ..Default::default()
@@ -73,5 +77,6 @@ async fn main() -> std::io::Result<()> {
         cleanup::do_periodic_cleanup(settings_clone, state_clone).await;
     });
 
-    start_server::start_server(listener, settings, state).await
+    start_server::start_server(listener, settings, state).await?;
+    Ok(())
 }

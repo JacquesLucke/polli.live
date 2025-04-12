@@ -1,8 +1,10 @@
-use actix_web::{post, web, HttpResponse, Responder};
+#![deny(clippy::unwrap_used)]
+
+use actix_web::{HttpResponse, Responder, post, web};
 use byte_unit::Byte;
 use chrono::Utc;
 
-use crate::{errors::AppError, SessionID, SharedState, UserID, UserResponse};
+use crate::{SessionID, SharedState, UserID, UserResponse, errors::AppError};
 
 #[derive(serde::Deserialize)]
 struct RespondQueryParams {

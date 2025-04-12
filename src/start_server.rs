@@ -1,12 +1,12 @@
 use actix_cors::Cors;
 use actix_web::http::header::{CacheControl, CacheDirective};
 use actix_web::middleware::DefaultHeaders;
-use actix_web::{web, App, HttpServer};
+use actix_web::{App, HttpServer, web};
 use parking_lot::Mutex;
 use std::net::TcpListener;
 use std::sync::Arc;
 
-use crate::{routes, Settings, SharedState, State};
+use crate::{Settings, SharedState, State, routes};
 
 pub async fn start_server(
     listener: TcpListener,
@@ -31,7 +31,7 @@ pub async fn start_server(
     })
     .workers(1)
     .listen(listener)
-    .unwrap()
+    .expect("Failed to bind to port")
     .run()
     .await
 }
